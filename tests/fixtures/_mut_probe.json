@@ -1,0 +1,58 @@
+{
+ "now": 1234567890,
+ "cim": [
+  {
+   "pid": 999,
+   "ppid": 4,
+   "started_at": 1793415260,
+   "mem_bytes": 1048576,
+   "cmdline": "MUTATED-AGENT",
+   "exe": "C:\\bin\\claude.exe",
+   "name": "claude.exe"
+  },
+  {
+   "pid": 101,
+   "ppid": 100,
+   "started_at": 1793415261,
+   "mem_bytes": 2097152,
+   "cmdline": "node worker.js",
+   "exe": "C:\\bin\\node.exe",
+   "name": "node.exe"
+  },
+  {
+   "pid": 102,
+   "ppid": 100,
+   "started_at": 1793415262,
+   "mem_bytes": 4096,
+   "cmdline": "git status",
+   "exe": "C:\\bin\\git.exe",
+   "name": "git.exe"
+  },
+  {
+   "pid": 200,
+   "ppid": 4,
+   "started_at": 1793415270,
+   "mem_bytes": 524288,
+   "cmdline": "codex",
+   "exe": "C:\\bin\\codex.exe",
+   "name": "codex.exe"
+  }
+ ],
+ "l2": [
+  {
+   "v": 1,
+   "ts": "2026-10-30T20:11:03Z",
+   "source": "claude-code",
+   "pid": 100,
+   "cwd": "D:/ws/projV",
+   "state": "blocked",
+   "kind": "permission",
+   "msg": "Approve rm -rf build?",
+   "exit_code": 0
+  }
+ ],
+ "titles": {
+  "200": "codex | running tests"
+ },
+ "status_dir_error": null
+}

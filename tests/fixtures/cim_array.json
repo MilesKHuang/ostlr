@@ -1,0 +1,5 @@
+[
+  {"ProcessId": 100, "ParentProcessId": 4, "CreationDate": "/Date(1793415260890)/", "WorkingSetSize": 1048576, "CommandLine": "claude.exe --resume", "ExecutablePath": "C:\\bin\\claude.exe", "Name": "claude.exe"},
+  {"ProcessId": 101, "ParentProcessId": 100, "CreationDate": "/Date(1793415261000)/", "WorkingSetSize": 2097152, "CommandLine": "node worker.js", "ExecutablePath": "C:\\bin\\node.exe", "Name": "node.exe"},
+  {"ProcessId": 102, "ParentProcessId": 100, "CreationDate": "/Date(1793415262000)/", "WorkingSetSize": 4096, "CommandLine": "git status", "ExecutablePath": "C:\\bin\\git.exe", "Name": "git.exe"}
+]

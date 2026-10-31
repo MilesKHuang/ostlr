@@ -1,0 +1,18 @@
+{
+  "now": 1793415300,
+  "cim": [
+    {"ProcessId": 100, "ParentProcessId": 4, "CreationDate": "/Date(1793415260000)/", "WorkingSetSize": 1048576, "CommandLine": "claude.exe --resume", "ExecutablePath": "C:\\bin\\claude.exe", "Name": "claude.exe"},
+    {"ProcessId": 101, "ParentProcessId": 100, "CreationDate": "/Date(1793415261000)/", "WorkingSetSize": 2097152, "CommandLine": "node worker.js", "ExecutablePath": "C:\\bin\\node.exe", "Name": "node.exe"},
+    {"ProcessId": 102, "ParentProcessId": 100, "CreationDate": "/Date(1793415262000)/", "WorkingSetSize": 4096, "CommandLine": "git status", "ExecutablePath": "C:\\bin\\git.exe", "Name": "git.exe"},
+    {"ProcessId": 200, "ParentProcessId": 4, "CreationDate": "/Date(1793415270000)/", "WorkingSetSize": 524288, "CommandLine": "codex", "ExecutablePath": "C:\\bin\\codex.exe", "Name": "codex.exe"},
+    {"ProcessId": 300, "ParentProcessId": 4, "CreationDate": "/Date(1793415280000)/", "WorkingSetSize": 262144, "CommandLine": "projv_tui", "ExecutablePath": "C:\\bin\\projv_tui.exe", "Name": "projv_tui.exe"},
+    {"ProcessId": 400, "ParentProcessId": 4, "CreationDate": "/Date(1793415290000)/", "WorkingSetSize": 131072, "CommandLine": "pwsh -NoLogo", "ExecutablePath": "C:\\bin\\pwsh.exe", "Name": "pwsh.exe"}
+  ],
+  "l2": [
+    {"v": 1, "ts": "2026-10-31T02:54:55Z", "source": "claude-code", "pid": 100, "cwd": "D:/ws/projV", "state": "blocked", "kind": "permission", "msg": "Approve rm -rf build?", "exit_code": 0},
+    {"v": 1, "ts": "2026-10-31T02:54:58Z", "source": "ostlr-run", "pid": 300, "cwd": "D:/ws/sop-test", "state": "idle", "kind": "", "msg": "", "exit_code": null},
+    {"v": 1, "ts": "2026-10-31T02:54:59Z", "source": "ostlr-run", "pid": 400, "cwd": "D:/ws/relic", "state": "done", "kind": "", "msg": "exited", "exit_code": 1}
+  ],
+  "titles": {"200": "codex | running tests"},
+  "status_dir_error": null
+}

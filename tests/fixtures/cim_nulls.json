@@ -1,0 +1,10 @@
+[
+  {"ProcessId": 0, "ParentProcessId": 0, "CreationDate": "/Date(1793415260890)/", "WorkingSetSize": 8192, "CommandLine": null, "ExecutablePath": null, "Name": "System Idle Process"},
+  {"ProcessId": 4, "ParentProcessId": 0, "CreationDate": "/Date(1793415260890)/", "WorkingSetSize": 10092544, "CommandLine": null, "ExecutablePath": null, "Name": "System"},
+  {"ProcessId": 300, "ParentProcessId": 4, "CreationDate": "not a date", "WorkingSetSize": null, "CommandLine": null, "ExecutablePath": null, "Name": "broken.exe"},
+  {"ProcessId": "301", "ParentProcessId": "300", "CreationDate": 1793415260890, "WorkingSetSize": "4096", "CommandLine": "numeric pid", "ExecutablePath": "", "Name": "numeric.exe"},
+  {"ParentProcessId": 4, "CreationDate": "/Date(1793415260890)/", "Name": "no-pid.exe"},
+  "not an object",
+  {"ProcessId": 302, "ParentProcessId": 4, "CreationDate": "/Date(1793415260890)/", "WorkingSetSize": 512, "CommandLine": "dup", "ExecutablePath": "C:\\bin\\dup.exe", "Name": "dup.exe"},
+  {"ProcessId": 302, "ParentProcessId": 4, "CreationDate": "/Date(1793415260890)/", "WorkingSetSize": 512, "CommandLine": "dup again", "ExecutablePath": "C:\\bin\\dup.exe", "Name": "dup.exe"}
+]

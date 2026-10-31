@@ -1,0 +1,5 @@
+[
+  {"ProcessId": 200, "ParentProcessId": 4, "CreationDate": "20261030201103.000000+000", "WorkingSetSize": 1024, "CommandLine": "codex", "ExecutablePath": "C:\\bin\\codex.exe", "Name": "codex.exe"},
+  {"ProcessId": 201, "ParentProcessId": 200, "CreationDate": "20261030201103.500000+120", "WorkingSetSize": 2048, "CommandLine": "codex child", "ExecutablePath": "C:\\bin\\codex.exe", "Name": "codex.exe"},
+  {"ProcessId": 202, "ParentProcessId": 200, "CreationDate": "20261030201103.000000-300", "WorkingSetSize": 3072, "CommandLine": "codex child 2", "ExecutablePath": "C:\\bin\\codex.exe", "Name": "codex.exe"}
+]
