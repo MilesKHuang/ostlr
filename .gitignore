@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# runtime data (never committed)
+logs/
+*.log
+status/
+*.sqlite
+*.db
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
