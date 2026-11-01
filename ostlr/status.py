@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import paths
+from . import schema
 
 # mirrors schema.py / config.py (dev_1 owns those; hardcoded here on purpose)
 SCHEMA_VERSION = 1
@@ -255,6 +256,28 @@ class Heartbeat:
             self._thread.join(timeout=2.0)
 
 
+def _child_env() -> Dict[str, str]:
+    """The environment the launched agent gets.
+
+    The panel injects its own package root into PYTHONPATH so the wrapper
+    (`python -m ostlr run`) resolves from any project directory. The agent must
+    not inherit that: it would leak our source tree into every launched shell.
+    `OSTLR_WRAPPER_ROOT` names the injected entry, so it is removed here and the
+    marker itself is dropped.
+    """
+    env = dict(os.environ)
+    root = env.pop(schema.WRAPPER_ROOT_ENV, "")
+    if not root:
+        return env
+    current = env.get("PYTHONPATH", "")
+    parts = [p for p in current.split(os.pathsep) if p and os.path.normcase(p) != os.path.normcase(root)]
+    if parts:
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+    else:
+        env.pop("PYTHONPATH", None)
+    return env
+
+
 def run(argv: Any, status_dir: Optional[str] = None,
         cwd: Optional[str] = None, heartbeat_s: float = HEARTBEAT_S) -> int:
     """Launch `argv` in its own console, report its life cycle, return its code.
@@ -298,7 +321,7 @@ def run(argv: Any, status_dir: Optional[str] = None,
     try:
         # No pipes: the child owns its console. A pipe here would both suppress
         # the child's rendering and die with us when the panel closes.
-        child = subprocess.Popen(spawn_arg, cwd=work_dir,
+        child = subprocess.Popen(spawn_arg, cwd=work_dir, env=_child_env(),
                                  creationflags=_creation_flags())
     except (OSError, ValueError) as exc:
         # Name the command: "cannot find the file specified" alone does not tell

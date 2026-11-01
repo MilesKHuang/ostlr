@@ -30,6 +30,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import config as config_mod
+from . import agents as agents_mod
 from . import ladder, paths, schema, sessions as sessions_mod, store as store_mod
 from . import view_model
 from .probe import cim, l2, l3
@@ -311,6 +312,10 @@ def main(argv: Optional[Sequence[str]] = None,
          panel_runner: Optional[Callable[[config_mod.Config], int]] = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = config_mod.load(args.config)
+    # `[[agents]]` overrides (baseline 4.5) must land before anything reads the
+    # registry: the launcher's PATH pre-check and the session matcher both read
+    # agents.TEMPLATES at call time.
+    agents_mod.apply_overrides(cfg.agents)
 
     if args.selftest:
         return cmd_selftest(cfg, clipboard=args.clipboard)

@@ -21,8 +21,8 @@ T14's launcher reads the same list so the two can never disagree about what
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,8 @@ class Template:
     # How a path is injected into this CLI: "path" or "at" (T14).
     inject: str = "path"
     inject_suffix: str = " "
+    # Extra argv for the launcher, from a `[[agents]]` override.
+    args: Tuple[str, ...] = ()
 
     def matches(self, exe: str, cmdline: str) -> bool:
         return _matches_tokens(self.tokens, exe, cmdline)
@@ -81,6 +83,57 @@ TEMPLATES: Tuple[Template, ...] = (
 UNKNOWN_ID = "unknown"
 
 _BY_ID: Dict[str, Template] = {t.id: t for t in TEMPLATES}
+
+# The built-in registry, kept intact so apply_overrides() always rebuilds from
+# the defaults instead of stacking overrides on top of overrides.
+DEFAULT_TEMPLATES: Tuple[Template, ...] = TEMPLATES
+
+
+def _tokens_for(command: str, fallback: Sequence[str]) -> Tuple[str, ...]:
+    """Whole-word tokens for an override's command, plus the built-in ones."""
+    base = command.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if base.lower().endswith(".exe"):
+        base = base[:-4]
+    out: List[str] = []
+    for token in ((base,) if base else ()) + tuple(fallback):
+        if token and token not in out:
+            out.append(token)
+    return tuple(out)
+
+
+def apply_overrides(entries: Optional[Sequence[Dict[str, Any]]] = None) -> Tuple[Template, ...]:
+    """Merge `[[agents]]` from config.toml into the registry (baseline 4.5).
+
+    An entry whose id matches a default replaces that template's command, args
+    and label - that is how an agent which is not on PATH gets launched from an
+    absolute path. An entry with a new id appends a template. The module-level
+    `TEMPLATES` and `_BY_ID` are rebound, so the launcher and the session
+    matcher can never disagree about what "claude" means.
+    """
+    global TEMPLATES, _BY_ID
+    merged: List[Template] = list(DEFAULT_TEMPLATES)
+    for entry in entries or ():
+        if not isinstance(entry, dict):
+            continue
+        agent_id = str(entry.get("id") or "").strip()
+        command = str(entry.get("command") or "").strip()
+        if not agent_id or not command:
+            continue
+        args = tuple(str(a) for a in (entry.get("args") or ()))
+        label = str(entry.get("label") or agent_id).strip() or agent_id
+        for index, template in enumerate(merged):
+            if template.id != agent_id:
+                continue
+            merged[index] = replace(template, command=command, label=label, args=args,
+                                    tokens=_tokens_for(command, template.tokens))
+            break
+        else:
+            merged.append(Template(id=agent_id, label=label,
+                                   tokens=_tokens_for(command, (agent_id,)),
+                                   command=command, args=args))
+    TEMPLATES = tuple(merged)
+    _BY_ID = {t.id: t for t in TEMPLATES}
+    return TEMPLATES
 
 
 def _word_re(token: str) -> "re.Pattern[str]":

@@ -54,6 +54,11 @@ class Config:
     last_dirs: List[str] = field(default_factory=list)
     last_agents: List[str] = field(default_factory=list)
 
+    # `[[agents]]` overrides (baseline 4.5): an entry with the id of a default
+    # template replaces its command / args, so an agent that is not on PATH can
+    # be launched from an absolute path. An entry with a new id adds a template.
+    agents: List[Dict[str, Any]] = field(default_factory=list)
+
     # Set by load(): where it came from and why it failed, if it did.
     path: str = ""
     load_error: str = ""
@@ -98,6 +103,34 @@ def _as_str_list(value: Any, limit: int = LAST_MEMORY) -> List[str]:
     return out
 
 
+def _as_agent_list(value: Any) -> List[Dict[str, Any]]:
+    """Parse `[[agents]]` tables (baseline 4.5).
+
+    Only the keys the launcher consumes survive: id, label, command, args.
+    An entry without an id or without a command is dropped - a half-written
+    override must not silently grey out a working agent.
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id") or "").strip()
+        command = str(item.get("command") or "").strip()
+        if not agent_id or not command:
+            continue
+        args_raw = item.get("args")
+        args = [str(a) for a in args_raw] if isinstance(args_raw, (list, tuple)) else []
+        out.append({
+            "id": agent_id,
+            "label": str(item.get("label") or agent_id).strip() or agent_id,
+            "command": command,
+            "args": args,
+        })
+    return out
+
+
 def from_mapping(data: Dict[str, Any]) -> Config:
     """Build a Config from a parsed TOML table, tolerating bad values."""
     cfg = Config()
@@ -114,6 +147,7 @@ def from_mapping(data: Dict[str, Any]) -> Config:
     cfg.clip_chars = _as_int(data.get("clip_chars"), DEFAULT_CLIP_CHARS, minimum=1)
     cfg.last_dirs = _as_str_list(data.get("last_dirs"))
     cfg.last_agents = _as_str_list(data.get("last_agents"))
+    cfg.agents = _as_agent_list(data.get("agents"))
     return cfg
 
 
@@ -177,6 +211,13 @@ def dumps(cfg: Config) -> str:
         "last_agents = %s" % _toml_value(list(cfg.last_agents)),
         "",
     ]
+    for agent in cfg.agents:
+        lines.append("[[agents]]")
+        lines.append('id = %s' % _toml_value(agent.get("id", "")))
+        lines.append('label = %s' % _toml_value(agent.get("label", "")))
+        lines.append('command = %s' % _toml_value(agent.get("command", "")))
+        lines.append("args = %s" % _toml_value(list(agent.get("args") or [])))
+        lines.append("")
     return "\n".join(lines)
 
 

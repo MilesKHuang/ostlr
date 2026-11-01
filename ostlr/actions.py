@@ -36,6 +36,8 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from . import schema
+
 # mirrors config.py (dev_1 owns the constant; hardcoded here on purpose)
 SPAWN_ERROR_RETAIN_S = 30
 
@@ -63,8 +65,9 @@ REASON_CANCELLED = "cancelled"
 # The cwd marker `sessions.py` uses for "we do not know".
 UNKNOWN_CWD = "?"
 
-
-# --- result helpers -------------------------------------------------------
+# The env var that tells the wrapper which package root was injected for it, so
+# `status.run()` can hand the launched agent a clean PYTHONPATH again.
+WRAPPER_ROOT_ENV = schema.WRAPPER_ROOT_ENV
 
 def ok(reason: str = "", **extra: Any) -> Dict[str, Any]:
     """A success value."""
@@ -233,6 +236,33 @@ def creation_flags() -> int:
     return CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
 
 
+def package_root() -> str:
+    """The directory `ostlr` is importable from (the repo root when run in place)."""
+    here = os.path.abspath(__file__)
+    return os.path.dirname(os.path.dirname(here))
+
+
+def wrapper_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """The environment the wrapper is started with.
+
+    The wrapper is `python -m ostlr run -- ...`, and it is started with the
+    CHOSEN PROJECT DIRECTORY as its cwd - so without this, `-m ostlr` cannot be
+    resolved there and the wrapper dies before the agent starts ("nothing
+    happened" with no row and no reason). Prepending the package root to
+    PYTHONPATH makes the wrapper importable from any directory, which is the
+    whole point of a launcher. `status.run()` strips it again for the child.
+    """
+    env = dict(os.environ if base is None else base)
+    root = package_root()
+    current = env.get("PYTHONPATH", "")
+    parts = [p for p in current.split(os.pathsep) if p] if current else []
+    if root not in parts:
+        parts.insert(0, root)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    env[WRAPPER_ROOT_ENV] = root
+    return env
+
+
 def launch(template: Any, cwd: str, popen: Any = None,
            python: Optional[str] = None,
            argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
@@ -273,7 +303,8 @@ def launch(template: Any, cwd: str, popen: Any = None,
         spawn_argv.extend(_as_text(a) for a in extra)
     spawn = popen or subprocess.Popen
     try:
-        child = spawn(spawn_argv, cwd=work_dir, creationflags=creation_flags())
+        child = spawn(spawn_argv, cwd=work_dir, creationflags=creation_flags(),
+                      env=wrapper_env())
     except (OSError, ValueError) as exc:
         return fail(REASON_SPAWN_FAILED, detail=str(exc), command=command)
 

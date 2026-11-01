@@ -196,3 +196,9 @@ def is_valid_state(state: Any) -> bool:
 
 def is_valid_kind(kind: Any) -> bool:
     return isinstance(kind, str) and kind.strip().lower() in L2_KINDS
+
+
+# The env var that names the package root the launcher injected for its wrapper,
+# so `status.run()` can hand the launched agent a clean PYTHONPATH. It lives here
+# because both sides of a launch read it.
+WRAPPER_ROOT_ENV = "OSTLR_WRAPPER_ROOT"

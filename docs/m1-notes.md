@@ -4,6 +4,41 @@ Companion to `docs/sop/steve-ostlr.md` (the agreed plan). This file records what
 a verifier runs, what only a human can judge, what was deliberately not built,
 and where the implementation differs from the plan.
 
+## 0. Defects found after the skill run (fixed)
+
+**D1 - launching in any other directory did nothing (T12/T14).** The launcher
+starts its wrapper as `python -m ostlr run -- <agent>` with the **chosen project
+directory** as cwd. `-m ostlr` cannot be resolved from an arbitrary directory, so
+the wrapper died in its new console before the agent started: an empty row, no
+status file, no reason on screen - precisely the "clicked launch, nothing
+happened" failure the plan forbids. It survived earlier smoke tests because they
+launched with the repository as the cwd, the one directory where the import
+works.
+
+Fix: `actions.wrapper_env()` puts the package root first on `PYTHONPATH` and
+names it in `OSTLR_WRAPPER_ROOT`; `launch()` passes that environment to `Popen`;
+`status._child_env()` strips the injected root again so the launched agent never
+inherits our source tree. `tests/unit/test_wrapper_env.py` proves the module runs
+from a temp directory, proves it fails without the env (so nobody "simplifies"
+the fix away later) and checks the child environment is cleaned.
+
+Verified end to end rather than by inspection - a launch from
+`%TEMP%\ostlr-cwd-proof` with a child that writes `os.getcwd()`:
+
+```
+launch ok: True reason: launched pid: 12420
+child cwd: C:\Users\ADMINI~1\AppData\Local\Temp\ostlr-cwd-proof
+expected : C:\Users\ADMINI~1\AppData\Local\Temp\ostlr-cwd-proof
+RESULT: MATCH
+```
+
+**D2 - the fix text promised a config table that was never read.** The launcher
+greys a missing agent with "install it or set an absolute path in config.toml",
+but no `[[agents]]` table existed in `config.py`. Now it is parsed, written back,
+and merged into the registry by `agents.apply_overrides()` before anything reads
+it, so the promise is true; `tests/unit/test_agent_overrides.py` pins parsing,
+merging, dedupe and the PATH pre-check that follows.
+
 ## 1. Acceptance per milestone (verbatim from plan section 5)
 
 | Milestone | Days | Contains | Exit criterion (every line must hold) |

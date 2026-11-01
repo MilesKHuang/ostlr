@@ -92,6 +92,11 @@ def command_for(template: Any, extra_args: Optional[Sequence[str]] = None,
     argv = [exe, "-m", "ostlr", "run", "--"]
     if command:
         argv.append(command)
+    if isinstance(template, dict):
+        template_args = template.get("args") or ()
+    else:
+        template_args = getattr(template, "args", ()) or ()
+    argv.extend(_as_text(a) for a in template_args)
     argv.extend(_as_text(a) for a in (extra_args or []))
     return argv
 

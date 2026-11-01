@@ -74,6 +74,27 @@ keeps a heartbeat while it runs, and records the exit code when it ends. It
 reaches `working`, `done`, `cwd` and liveness - **not** `blocked`: only the CLI
 itself knows when it is waiting for a human.
 
+## Agents the launcher can start
+
+The launcher greys out an agent it cannot find and says
+"install it or set an absolute path in config.toml". That path is real:
+
+```toml
+[[agents]]
+id = "projv"
+label = "projV"
+command = "D:\\ws\\proJV\\build\\Release\\proJV_tui.exe"
+args = []
+```
+
+`id` must match a built-in template (`claude`, `codex`, `projv`, `pwsh`) to
+replace its command, or be a new id to add one. A missing `label` falls back to
+the id; an entry without `id` or `command` is ignored rather than half-applied.
+
+The launched agent always starts **in the directory you picked**, and projV takes
+that directory as its workspace (`getWorkspaceDir()` is the launch directory),
+so "start projV here" opens it exactly on that project.
+
 ## The honest limit
 
 `blocked` needs a producer. A stock `claude` or `codex` writes no status file,
