@@ -45,6 +45,12 @@
   const term = new Terminal({
     fontFamily: fontFamily,
     fontSize: FONT_SIZE,
+    // Box-drawing and block characters are drawn by xterm itself, not taken from
+    // the font. That removes the last source of row-to-row misalignment: in every
+    // CJK font measured here those glyphs are a full cell and a half wide, so the
+    // frame drifted by a fraction of a pixel per row - invisible on one line,
+    // obvious as soon as Chinese and English alternate.
+    customGlyphs: true,
     lineHeight: 1.0,
     cursorBlink: true,
     allowProposedApi: true,

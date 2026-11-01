@@ -17,13 +17,13 @@ from ostlr.qt import fonts, procstat
 
 
 class TestFontContract(unittest.TestCase):
-    def test_the_first_family_is_a_western_monospace(self):
-        # Box-drawing characters must come from a font where they are ONE cell.
-        # In every CJK font measured here they are two cells (14 px vs 7 px), and
-        # each border then bleeds into the next cell - the reported symptom.
+    def test_the_first_family_is_exact_two_to_one(self):
+        # Text must be exactly 2:1 (NSimSun/SimSun at 14 px: 7 and 14), and the
+        # box-drawing glyphs are drawn by xterm itself (customGlyphs), so neither
+        # the text nor the frame depends on a font's idea of a cell.
         family = fonts.family_for(config.Config())
         first = family.split(",")[0].strip().strip('"')
-        self.assertIn(first, ("Consolas", "Cascadia Mono"), family)
+        self.assertIn(first, ("NSimSun", "SimSun"), family)
 
     def test_a_cjk_face_is_in_the_stack(self):
         # Chinese still has to be drawn by a font that has it, or the glyphs come
