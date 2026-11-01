@@ -60,32 +60,17 @@
     // glyph rendered half a pixel apart from its neighbour - the "pixel-level
     // jitter". letterSpacing is set to whatever makes the advance integral on this
     // display, so the fix follows the DPI and the font instead of hardcoding them.
-    letterSpacing: (function () {
-      try {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.font = FONT_SIZE + 'px ' + fontFamily;
-        const advance = ctx.measureText('M').width;
-        const dpr = window.devicePixelRatio || 1;
-        const target = Math.round(advance * dpr) / dpr;   // nearest integer device px
-        return Math.max(0, Math.min(1, target - advance));
-      } catch (e) {
-        return 0;
-      }
-    })(),
-    // Only the frame is drawn by xterm; all text (Latin and CJK) still comes from
-    // the bundled faces. Reason: no CJK face draws its box characters inside one
-    // cell, so a font-drawn frame drifts or leaves a seam at every row boundary.
-    customGlyphs: true,
-    // Integer cell height: at a fractional height the drawn box glyphs leave a
-    // hairline gap between rows, which reads as "the vertical bar is broken".
-    // lineHeight 1.3 x 13.333 = 17.32 CSS = 25.98 device px - still fractional. The
-    // height is fontSize * lineHeight, so lineHeight is chosen to land on 18 CSS
-    // px = 27.00 device px, which is integral.
-    lineHeight: 18 / (40 / 3),
     letterSpacing: 0,
+    // 1.35 x 13.333 = 18.00 CSS px = 27.00 DEVICE px. The cell height has to be an
+    // integer in device pixels too: xterm draws the frame itself (customGlyphs) as
+    // one segment per cell, so a fractional height leaves a hairline between the
+    // segments and every vertical bar looks dashed.
+    lineHeight: 1.35,
+    // Only the frame is drawn by xterm; the text comes from the bundled faces. No
+    // CJK face draws its box characters inside one cell, so a font-drawn frame
+    // drifts or shows a seam at every row boundary.
+    customGlyphs: true,
     rescaleOverlappingGlyphs: true,
-    lineHeight: 1.0,
     cursorBlink: true,
     allowProposedApi: true,
     theme: {
