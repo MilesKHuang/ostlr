@@ -251,15 +251,46 @@ def gpu_reason() -> str:
         return str(_GPU["reason"] or "")
 
 
+def tree_pids(pid: int) -> List[int]:
+    """`pid` and every descendant, or just `[pid]` when psutil cannot say.
+
+    GPU counters are keyed by the pid that owns the engine instance, and the owner
+    is usually a grandchild (a shell runs an interpreter runs the agent). Asking
+    for the root alone is why a pane that was visibly using the GPU still printed
+    "-".
+    """
+    if not pid:
+        return []
+    psutil = _psutil()
+    if psutil is None:
+        return [int(pid)]
+    try:
+        root = psutil.Process(int(pid))
+        return [int(pid)] + [p.pid for p in root.children(recursive=True)]
+    except Exception:
+        return [int(pid)]
+
+
 def sample(pids: List[int]) -> Dict[int, Dict[str, Optional[float]]]:
-    """One snapshot per pane pid."""
+    """One snapshot per pane pid, with the GPU summed over that pane's tree."""
     percents = gpu_by_pid()
     memory = gpu_mib_by_pid()
     result: Dict[int, Dict[str, Optional[float]]] = {}
     for pid in pids:
         stats = tree_stats(pid)
-        stats["gpu"] = percents.get(int(pid))
-        stats["gpu_mib"] = memory.get(int(pid))
+        tree = tree_pids(pid)
+        hits = [percents[p] for p in tree if p in percents]
+        # Sum, because one process can hold several engine instances (3D + Copy +
+        # Video) and a tree can hold several processes. No hit means None - "we
+        # measured nothing" is not "it used no GPU".
+        stats["gpu"] = min(100.0, sum(hits)) if hits else None
+        shared = [memory[p] for p in tree if p in memory]
+        # `GPU Process Memory\Dedicated Usage` occasionally reports a value no
+        # adapter could hold (219 GB was measured here). Beyond the biggest
+        # consumer card it is a junk counter, and printing it would be worse than
+        # printing nothing.
+        shared = [value for value in shared if 0 < value < 32768]
+        stats["gpu_mib"] = max(shared) if shared else None
         result[int(pid)] = stats
     return result
 

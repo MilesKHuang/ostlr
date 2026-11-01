@@ -119,7 +119,7 @@ class RowDelegate(QStyledItemDelegate):
                          Qt.AlignVCenter | Qt.AlignLeft, view_model.state_word(row))
 
         bars_left = left + 24 + 92
-        bar_width = max(52.0, (rect.width() - bars_left - right_pad - 16) / 3 - 6)
+        bar_width = max(64.0, (rect.width() - bars_left - right_pad - 16) / 3 - 6)
         for index, (value, label) in enumerate(((row.get("cpu"), "cpu"),
                                                 (row.get("mem"), "mem"),
                                                 (row.get("gpu"), "gpu"))):
@@ -130,13 +130,19 @@ class RowDelegate(QStyledItemDelegate):
                 caption = gauges_mod.human_mb(row.get("rss"))
             else:
                 caption = "-" if value is None else "%d%%" % int(round(value))
+            text = "%s %s" % (label, caption)
             painter.setPen(QPen(style.colour("fg_dim")))
             painter.drawText(QRectF(bx, row_top, bar_width, line_height),
-                             Qt.AlignVCenter | Qt.AlignLeft, "%s %s" % (label, caption))
-            bar_rect = QRectF(bx + 52, row_top + line_height / 2 - 4,
-                              max(20.0, bar_width - 52), 8)
-            fraction = 0.0 if value is None else max(0.0, min(1.0, float(value) / 100.0))
-            tint = style.colour("danger") if (value or 0) > 60 else style.colour("accent")
-            _bar(painter, bar_rect, fraction, tint)
+                             Qt.AlignVCenter | Qt.AlignLeft, text)
+            # The bar starts where the text ends. A fixed offset put it on top of
+            # "mem 313 MB", which is wider than any fixed offset worth picking.
+            bar_x = bx + min(small_metrics.horizontalAdvance(text) + 6,
+                             max(0.0, bar_width - 24))
+            if bx + bar_width - bar_x >= 20:
+                bar_rect = QRectF(bar_x, row_top + line_height / 2 - 4,
+                                  bx + bar_width - bar_x, 8)
+                fraction = 0.0 if value is None else max(0.0, min(1.0, float(value) / 100.0))
+                tint = style.colour("danger") if (value or 0) > 60 else style.colour("accent")
+                _bar(painter, bar_rect, fraction, tint)
 
         painter.restore()
