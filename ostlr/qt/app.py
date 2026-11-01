@@ -224,8 +224,20 @@ class MainWindow(QMainWindow):
         pane.exited.connect(lambda reason, p=pane: self._on_pane_exit(p, reason))
         pane.started.connect(lambda pid, p=pane: self._bind_pane(p, pid))
         pane.l1_report.connect(self._on_l1)
+        pane.renderer_changed.connect(self._on_renderer)
         self.panes.append(pane)
         return pane
+
+    def _on_renderer(self, status: str) -> None:
+        """`webgl` is the expected path and needs no announcement.
+
+        A fallback is a promise kept: the frame is then drawn by the font, which
+        leaves a gap at every row boundary and stripes in a gauge. Say so instead
+        of letting the user wonder why the borders look broken.
+        """
+        if not status.startswith("webgl"):
+            self._set_receipt("terminal renderer: %s (the frame is drawn by the "
+                              "font, so borders may show seams)" % status)
 
     def _bind_pane(self, pane, pid: int) -> None:
         if not pid:
@@ -330,11 +342,18 @@ class MainWindow(QMainWindow):
             age = record_age(record)
             state = str(record.get("state") or "unknown")
             source = str(record.get("source") or "none")
+            quiet = pane.quiet_for() if hasattr(pane, "quiet_for") else 0.0
             if not record:
+                # The pane withdrew its claim (or never made one). That is
+                # `unknown`, not `idle`: silence from a child is the absence of a
+                # report, and an agent waiting for approval is silent too.
                 state, source = "unknown", "none"
             elif age is not None and age > stale_after:
                 state, source = "unknown", "none"
             stats = self.stats.get(pid) or {}
+            msg = str(record.get("msg") or "")
+            if not record:
+                msg = "quiet for %ds, nothing reported" % int(quiet)
             rows.append({
                 "pid": pid,
                 "state": state,
@@ -573,6 +592,11 @@ class MainWindow(QMainWindow):
 
     # --- layout / tray -----------------------------------------------------
     def _layout_payload(self) -> List[Dict[str, object]]:
+        """One entry per tab that holds a pane. Split panes are off for now.
+
+        Tabs and their command lines come back; a shape this build cannot draw
+        does not (`_restore_layout` keeps the first pane of an old split entry).
+        """
         tabs: List[Dict[str, object]] = []
         for index in range(self.tabs.count()):
             widget = self.tabs.widget(index)
@@ -589,10 +613,14 @@ class MainWindow(QMainWindow):
         data = layout_mod.load()
         restored = 0
         for entry in data.get("tabs") or []:
-            first = (entry.get("panes") or [{}])[0]
-            if not first.get("argv"):
+            panes = [p for p in (entry.get("panes") or [])
+                     if isinstance(p, dict) and p.get("argv")]
+            if not panes:
                 continue
-            if self.new_terminal(first.get("argv"), first.get("cwd") or None,
+            # A layout written while the split UI existed keeps its first pane and
+            # drops the rest: restoring a shape this build cannot draw would be a
+            # lie about what the panel does.
+            if self.new_terminal(panes[0].get("argv"), panes[0].get("cwd") or None,
                                  title=str(entry.get("title") or "shell")) is None:
                 break
             restored += 1

@@ -65,10 +65,6 @@ def main() -> int:
         # directory structure is preserved.
         "--add-data", os.path.join(qt_dir, "term.html") + os.pathsep + os.path.join("ostlr", "qt"),
         "--add-data", os.path.join(qt_dir, "vendor") + os.pathsep + os.path.join("ostlr", "qt", "vendor"),
-        # The font directory travels too: a font dropped there must be found by a
-        # packaged build exactly as it is from source.
-        "--add-data", os.path.join(qt_dir, "fonts") + os.pathsep + os.path.join("ostlr", "qt", "fonts"),
-        "--add-data", os.path.join(qt_dir, "vendor") + os.pathsep + os.path.join("ostlr", "qt", "vendor"),
         ENTRY,
     ]
     print(" ".join(argv))

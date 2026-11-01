@@ -1,41 +1,48 @@
 """The font contract and the GPU counters, tested where they can be."""
 
 import os
-import tempfile
 import unittest
 
 from ostlr import config
 from ostlr.qt import fonts, procstat
 
-EMPTY_DIR = os.path.join(tempfile.gettempdir(), "ostlr-no-such-font-dir")
-
 
 class TestFontContract(unittest.TestCase):
-    def test_the_bundled_webfont_is_the_first_family(self):
-        # Both halves are bundled web fonts (OFL): JetBrains Mono for ASCII and the
-        # box characters, WenKai for Chinese. No file is loaded from the system
-        # first, and neither may be a Microsoft face.
-        family = fonts.family_for(config.Config(), EMPTY_DIR)
-        self.assertIn("OstlrMono Latin", family.split(",")[0], family)
-        self.assertIn("LXGW WenKai Mono", family)
+    def test_the_default_stack_is_the_os_terminal_stack(self):
+        # The pane must look like the user's own terminal. Geometry is the
+        # renderer's job now (docs/parity.md), so the font is a look, and the look
+        # must not change because a TUI is hosted in Ostlr.
+        family = fonts.family_for(config.Config())
+        first = family.split(",")[0].strip().strip('"')
+        configured = fonts.os_terminal_face()
+        if configured:
+            self.assertEqual(configured, first,
+                             "Windows Terminal names %r but the stack starts with %r"
+                             % (configured, first))
+        else:
+            self.assertIn(first, ("Cascadia Mono", "Consolas"), family)
+        self.assertIn("Consolas", family)
 
-    def test_nothing_microsoft_is_required(self):
-        family = fonts.family_for(config.Config(), EMPTY_DIR)
-        for banned in ("YaHei", "MS Gothic", "SimSun"):
-            self.assertNotIn(banned, family.split("monospace")[0], family)
+    def test_a_cjk_face_is_still_named_explicitly(self):
+        # Chinese must be drawn by the face Windows uses, not by whatever the
+        # browser happens to pick.
+        family = fonts.family_for(config.Config())
+        self.assertIn(fonts._CJK_FACE, family)
 
-    def test_a_cjk_face_is_in_the_stack(self):
-        # Chinese must be drawn by a bundled CJK face, not a random system fallback.
-        family = fonts.family_for(config.Config(), EMPTY_DIR)
-        self.assertIn("LXGW WenKai Mono", family)
+    def test_no_font_file_ships_with_the_panel(self):
+        # 583 files / 29.5 MB used to travel with the exe for a claim about
+        # alignment that turned out to belong to the renderer.
+        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fonts")
+        self.assertFalse(os.path.exists(fonts_dir), fonts_dir)
 
-    def test_a_configured_family_wins_over_the_default(self):
+    def test_a_configured_family_wins_over_everything(self):
         cfg = config.Config()
         cfg.font_family = "Consolas, Sarasa Mono SC"
-        self.assertTrue(fonts.family_for(cfg, EMPTY_DIR).startswith("Consolas"))
+        self.assertTrue(fonts.family_for(cfg).startswith("Consolas"))
 
-    def test_an_empty_directory_reports_no_bundle(self):
-        self.assertEqual("", fonts.bundled_font(EMPTY_DIR))
+    def test_an_unreadable_windows_terminal_setting_is_not_an_error(self):
+        # No settings file must degrade to the built-in candidates, not raise.
+        self.assertIsInstance(fonts.os_terminal_face(), str)
 
     def test_font_family_round_trips_through_config(self):
         cfg = config.from_mapping({"font_family": "MS Gothic, Consolas"})

@@ -200,6 +200,8 @@ class TerminalPane(QWidget):
     # The PTY started late (once the page knew its grid), so callers listen here
     # instead of reaching into the bridge that may not exist yet.
     started = Signal(int)
+    # "" until the page reports; then "webgl" or "dom" plus a reason on a fallback.
+    renderer_changed = Signal(str)
 
     def stop(self) -> None:
         if self.bridge is not None:
@@ -223,6 +225,10 @@ class TerminalPane(QWidget):
         # Filled in once the PTY reports its pid: this is the session identity.
         self.session_pid = 0
         self.exited_code = None
+        # Which renderer the page ended up with. Geometry belongs to the
+        # terminal, so this is a fact worth showing when it degrades: the DOM
+        # fallback draws the frame from the font and leaves a 4 px gap per row.
+        self.renderer = ""
         self._l1 = None
         try:
             from ..probe import l1 as l1_mod
@@ -261,9 +267,6 @@ class TerminalPane(QWidget):
         url = QUrl.fromLocalFile(_bundled("term.html"))
         query = QUrlQuery()
         query.addQueryItem("font", fonts_mod.family_for(self.cfg))
-        bundled = fonts_mod.bundled_font()
-        if bundled:
-            query.addQueryItem("fontfile", QUrl.fromLocalFile(bundled).toString())
         url.setQuery(query)
         return url
     def _start_pty(self, cols: int, rows: int) -> None:
@@ -328,19 +331,41 @@ class TerminalPane(QWidget):
         self._report("working", "running in the panel")
 
     def heartbeat(self) -> None:
-        """Report what the pane can actually observe: output or quiet.
+        """Say only what the pane can observe, and stop saying it when it cannot.
 
-        "working" forever was the bug behind "it is idle but shows working": the
-        old heartbeat only ran when bytes arrived, so a quiet child kept the last
-        state for ever. A pane owns its PTY, so quiet is a measurement, not a
-        guess - it is safe to call that `idle`, and it is the only way the row can
-        ever stop saying working.
+        The old heartbeat called 2 s of silence `idle`. That is the most expensive
+        error this product can make: an agent waiting for an approval is silent,
+        and an agent thinking about a hard question is silent too. Silence is not
+        idleness, it is the absence of a report - so the pane withdraws its claim
+        and the row falls back to `unknown`. Only the program itself (L1) or a real
+        producer may say `idle` or `blocked`.
         """
-        quiet_for = time.time() - self._last_data_at
-        if quiet_for < 2.0:
-            self._report("working", "output flowing")
+        claim = pane_claim(self.quiet_for())
+        if claim:
+            self._report(claim, "output flowing")
         else:
-            self._report("idle", "quiet for %ds" % int(quiet_for))
+            self._withdraw()
+
+    def quiet_for(self) -> float:
+        """Seconds since the child last produced output."""
+        return max(0.0, time.time() - self._last_data_at)
+
+    def _withdraw(self) -> None:
+        """Delete the record this pane wrote, and only that one.
+
+        A record from another producer (L1, an external hook) is left alone: it is
+        not ours to withdraw.
+        """
+        if not self.session_pid:
+            return
+        try:
+            from .. import status as status_mod
+            existing = status_mod.read_status(self.session_pid)
+            if not existing or str(existing.get("source")) != "ostlr-pane":
+                return
+            status_mod.clear_status(self.session_pid)
+        except Exception:
+            pass
 
     def _report(self, state: str, msg: str, exit_code=None) -> None:
         if not self.session_pid:
@@ -421,6 +446,14 @@ class TerminalPane(QWidget):
         if "k" in payload:
             if self.bridge is not None:
                 self.bridge.write(payload["k"])
+        elif "renderer" in payload:
+            # The page says which renderer it got. A fallback is reported, never
+            # assumed: the DOM renderer draws the frame with the font, which is a
+            # visible downgrade (a gap at every row boundary).
+            name = str(payload.get("renderer") or "")
+            reason = str(payload.get("reason") or "")
+            self.renderer = name
+            self.renderer_changed.emit("%s%s" % (name, (": " + reason) if reason else ""))
         elif "r" in payload:
             cols, rows = payload["r"]
             cols, rows = int(cols), int(rows)
@@ -456,6 +489,26 @@ class TerminalPane(QWidget):
 
 
 import json  # noqa: E402  (kept last so the module reads top-down)
+
+
+# How long a child may be silent before the pane gives up its claim. Short enough
+# that a row stops lying, long enough that a redraw pause is not a flicker.
+QUIET_AFTER_S = 3.0
+
+
+def pane_claim(quiet_for: float) -> str:
+    """What a pane may claim about its child, given how long it has been quiet.
+
+    `working` while output flows, and "" (withdraw) once it has been silent. The
+    caller reads "": silence is not proof of anything, so the pane stops talking
+    instead of inventing `idle` - which is the one error the whole state ladder
+    exists to avoid (`docs/parity.md`, plan section 8.3).
+    """
+    try:
+        quiet = float(quiet_for)
+    except (TypeError, ValueError):
+        return ""
+    return "working" if quiet < QUIET_AFTER_S else ""
 
 
 def shell_for(cwd: Optional[str] = None) -> list:

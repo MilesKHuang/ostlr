@@ -4,11 +4,6 @@
 <meta charset="utf-8">
 <title>terminal</title>
 <link rel="stylesheet" href="vendor/xterm.css">
-<!-- Bundled terminal faces, both SIL OFL-1.1 so they can ship:
-     JetBrains Mono for ASCII and the box-drawing characters (its verticals span
-     the full cell, so `|` stays continuous), LXGW WenKai Mono for Chinese. -->
-<link rel="stylesheet" href="fonts/jetbrains/mono.css">
-<link rel="stylesheet" href="fonts/wenkai/mono.css">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #101216; overflow: hidden; }
   /* Padding lives on the WRAPPER, never on .xterm: the fit maths measures the
@@ -28,6 +23,7 @@
 <div id="terminal"></div>
 <script src="vendor/xterm.js"></script>
 <script src="vendor/xterm-addon-fit.js"></script>
+<script src="vendor/xterm-addon-webgl.js"></script>
 <script>
   // 40/3 px, not 14: JetBrains Mono's advance is 0.6 em, so the cell is 8.00 CSS px
   // = 12.00 DEVICE px at 150 % scaling. At 14 px it was 8.402 CSS = 12.604 device,
@@ -37,20 +33,14 @@
   const FONT_SIZE = 40 / 3;
 
   // --- the font comes from Python ------------------------------------------
-  // A terminal grid only stays aligned when advance(CJK) == 2 * advance(ASCII).
-  // Measured here at 14 px: Consolas 7.70/14.00 = 1.819 (wrong), MS Gothic and
-  // NSimSun 7.00/14.00 = 2.000 (right). Python passes the family (and, when one
-  // is bundled, the font file), so the page never guesses.
+  // Python passes the family, so the page never guesses. The default is the OS
+  // terminal's own stack (Cascadia Mono / Consolas + Microsoft YaHei UI, read
+  // from Windows Terminal's settings): hosting a TUI in Ostlr must not change how
+  // it looks. Nothing is bundled - the two OFL faces that used to ship here were
+  // removed once the measurements showed alignment belongs to the renderer.
   const query = new URLSearchParams(location.search);
   const fontFamily = query.get('font') ||
-        "'OstlrMono Latin', 'LXGW WenKai Mono', SimHei, NSimSun, Consolas, monospace";
-  const fontFile = query.get('fontfile') || '';
-  if (fontFile) {
-    // A bundled font wins over every system font, the way proJV keeps its own.
-    const face = new FontFace('OstlrMono', 'url("' + fontFile + '")');
-    document.fonts.add(face);
-    face.load().catch(function () { /* keep the system stack */ });
-  }
+        'Cascadia Mono, Consolas, "Microsoft YaHei UI", monospace';
 
   const term = new Terminal({
     fontFamily: fontFamily,
@@ -69,8 +59,10 @@
     // Only the frame is drawn by xterm; the text comes from the bundled faces. No
     // CJK face draws its box characters inside one cell, so a font-drawn frame
     // drifts or shows a seam at every row boundary.
+    // This option is honoured by the WebGL renderer only. On the DOM renderer it
+    // is inert and the font draws the frame, which is why the renderer is chosen
+    // below and reported to Python instead of being assumed.
     customGlyphs: true,
-    rescaleOverlappingGlyphs: true,
     cursorBlink: true,
     allowProposedApi: true,
     theme: {
@@ -88,6 +80,39 @@
   term.open(document.getElementById('terminal'));
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
+
+  // --- the renderer decides the geometry ------------------------------------
+  // The DOM renderer lays a row out as text, so the FONT decides where a cell
+  // ends: our Latin face's box-drawing vertical is 31 device px tall inside a
+  // 35 px row box (a 4 px gap at every row boundary - the frame looks dashed),
+  // and U+2588 covers 84 % of its cell (a gauge looks striped). The WebGL
+  // renderer draws every cell itself, exactly like the OS terminal, and both
+  // defects vanish: measured on a real pane, 8 gaps -> 0, 84 % -> 100 %.
+  //
+  // A silent downgrade would be a lie about how the pane is drawn, so the choice
+  // goes back to Python and a fallback is shown in the window.
+  let renderer = 'dom';
+  function attachWebgl() {
+    if (typeof WebglAddon === 'undefined') {
+      send({ renderer: 'dom', reason: 'webgl addon missing' });
+      return;
+    }
+    try {
+      const addon = new WebglAddon.WebglAddon();
+      addon.onContextLoss(function () {
+        renderer = 'dom';
+        send({ renderer: 'dom', reason: 'webgl context lost' });
+      });
+      term.loadAddon(addon);
+      renderer = 'webgl';
+      window.__webgl = addon;
+      send({ renderer: 'webgl' });
+    } catch (e) {
+      renderer = 'dom';
+      send({ renderer: 'dom', reason: 'webgl unavailable: ' + e });
+    }
+  }
+  attachWebgl();
 
   function cellSize() {
     // The renderer knows the real cell box. Asking it is the only reliable way:
@@ -202,6 +227,7 @@
                      maxGap: 0, parseMs: 0 };
       return true;
     },
+    renderer: function () { return renderer; },
     // The font contract, measured in the page: 2.000 or the borders will drift.
     font: function () {
       const canvas = document.createElement('canvas');
