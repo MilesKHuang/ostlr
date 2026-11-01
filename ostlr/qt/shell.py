@@ -66,6 +66,12 @@ class LauncherDialog(QWidget):
         self.home_label.setWordWrap(True)
         layout.addWidget(self.home_label, 1)
 
+        self.use_live = QPushButton("", self)
+        self.use_live.setVisible(False)
+        self.use_live.clicked.connect(self._adopt_live_copy)
+        layout.addWidget(self.use_live)
+        self._live_path = ""
+
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         cancel = QPushButton("Cancel", self)
@@ -99,6 +105,33 @@ class LauncherDialog(QWidget):
             lines.append("projv_files: %s   (api key: %s)"
                          % (info["files_dir"], "yes" if info["has_key"] else "NO"))
         self.home_label.setText("\n".join(lines))
+
+        # If this copy has no key but the user already runs one that does, offer
+        # that copy instead of letting a fresh install ask for the key again.
+        self._live_path = "" if info["has_key"] else discovery.best_keyed_copy(
+            str(entry.get("command")))
+        if self._live_path:
+            self.use_live.setText("Use the running copy: %s" % self._live_path)
+            self.use_live.setVisible(True)
+        else:
+            self.use_live.setVisible(False)
+
+    def _adopt_live_copy(self) -> None:
+        path = self._live_path
+        if not path:
+            return
+        discovery.remember(self.cfg, path)
+        try:
+            config_mod.save(self.cfg)
+        except Exception:
+            pass
+        self.reload_entries()
+        for index in range(self.combo.count()):
+            entry = self.combo.itemData(index)
+            if entry and os.path.normcase(str(entry.get("command"))) == os.path.normcase(path):
+                self.combo.setCurrentIndex(index)
+                break
+        self._update_home()
 
     def _browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose a program", self.directory,

@@ -23,22 +23,41 @@ import os
 import shutil
 from typing import Dict, Iterable, List, Optional
 
-# Name hints, not paths: an exe whose stem contains one of these is offered as a
-# launcher candidate. Adding a new agent to this list is optional - "Browse..."
-# covers anything missing, and a remembered pick survives.
+# Name hints, not paths: an executable whose stem IS one of these (or starts with
+# it followed by a separator) is offered as a launcher candidate. Strict equality
+# matters: a bare substring match turned "pi" into ping, pip and pathping, and
+# filled the launcher with system utilities.
 NAME_HINTS = (
-    "claude", "codex", "projv", "hermes", "herd", "aider", "ollama", "gemini",
-    "qwen", "opencode", "crush", "pi", "cursor", "windsurf", "continue",
-    "goose", "plandex", "mods", "sgpt", "llm",
+    "claude", "claude-code", "codex", "projv", "projv_tui", "hermes", "herd",
+    "aider", "ollama", "gemini", "qwen", "opencode", "crush", "goose", "plandex",
+    "sgpt", "mods", "gptme", "aichat",
 )
 
+# Separators that may follow a hint: "claude-code", "projv_tui", "hermes.exe".
+_SEPARATORS = ("-", "_", ".")
+
 # Names that are almost certainly a launcher and never an agent.
-NEVER = ("uninstall", "setup", "update", "helper", "crashpad", "node", "python")
+NEVER = ("uninstall", "setup", "update", "helper", "crashpad")
 
 
 def _stem(path: str) -> str:
     name = os.path.basename(path or "")
     return os.path.splitext(name)[0].lower()
+
+def _looks_like_agent(stem: str) -> bool:
+    """Whole-name match against the hints, not a substring search.
+
+    "pi" as a substring matched ping, pip and pathping; requiring the stem to BE
+    a hint (or to start with it followed by a separator) keeps the launcher to
+    actual agents while still accepting claude-code, projv_tui and hermes-cli.
+    """
+    for hint in NAME_HINTS:
+        if stem == hint:
+            return True
+        for separator in _SEPARATORS:
+            if stem.startswith(hint + separator):
+                return True
+    return False
 
 
 def path_candidates() -> List[Dict[str, object]]:
@@ -61,7 +80,7 @@ def path_candidates() -> List[Dict[str, object]]:
             stem = _stem(name)
             if any(bad in stem for bad in NEVER):
                 continue
-            if not any(hint in stem for hint in NAME_HINTS):
+            if not _looks_like_agent(stem):
                 continue
             full = os.path.join(directory, name)
             if stem not in seen:
@@ -176,3 +195,60 @@ def resolve(command: str) -> Optional[str]:
     if os.path.isabs(command):
         return command if os.path.exists(command) else None
     return shutil.which(command)
+
+
+def live_copies(cim_rows=None) -> List[Dict[str, object]]:
+    """Copies of an agent that are RUNNING right now.
+
+    This is the answer to "I already use projV, why is the one you launch
+    keyless?": the machine knows which copy is alive, and a live copy's
+    projv_files is the one that holds the user's API key. Showing it is
+    discovery, not guessing a path.
+    """
+    if cim_rows is None:
+        try:
+            from ..probe import cim as cim_mod
+            sample = cim_mod.probe_once()
+            cim_rows = getattr(sample, "rows", None) or []
+        except Exception:
+            cim_rows = []
+    out: List[Dict[str, object]] = []
+    seen = set()
+    for row in cim_rows or []:
+        exe = str(row.get("exe") or "")
+        if not exe:
+            continue
+        stem = _stem(exe)
+        if not _looks_like_agent(stem):
+            continue
+        key = os.path.normcase(exe)
+        if key in seen:
+            continue
+        seen.add(key)
+        info = home_of(exe)
+        out.append({"exe": exe, "pid": int(row.get("pid") or 0),
+                    "has_key": bool(info["has_key"]),
+                    "config": info["config"]})
+    return out
+
+
+def best_keyed_copy(command: str, cim_rows=None) -> str:
+    """A live copy of the same tool that has an API key, or "".
+
+    Same executable name, already running, with a readable config.toml that
+    contains a key. That is the copy the user actually uses day to day.
+    """
+    stem = _stem(command)
+    if not stem:
+        return ""
+    mine = os.path.normcase(os.path.abspath(command or ""))
+    for copy in live_copies(cim_rows):
+        exe = str(copy["exe"])
+        if not copy["has_key"]:
+            continue
+        if _stem(exe) != stem:
+            continue
+        if os.path.normcase(os.path.abspath(exe)) == mine:
+            continue
+        return exe
+    return ""
