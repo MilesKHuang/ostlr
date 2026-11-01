@@ -1,39 +1,59 @@
 # Bundled terminal font
 
-Drop a font file here (`.ttf` / `.otf` / `.ttc`) and Ostlr will use it for the
-terminal, ahead of every system font. One file is enough: the first one found is
-loaded and registered as the family `OstlrMono`.
+Drop a font file here (`.ttf` / `.otf` / `.ttc`) and Ostlr adds it to the terminal
+font stack as `OstlrMono`. One file is enough.
 
-## Why bundle one at all
+**It is added as the CJK fallback, not as the primary face.** That is deliberate:
+see below.
 
-A terminal grid only stays aligned when **advance(CJK) == 2 * advance(ASCII)**.
-Measured on this machine at 14 px:
+## Why a terminal needs two fonts, not one
 
-| family | ASCII | CJK | ratio |
-|---|---|---|---|
-| Consolas | 7.70 px | 14.00 px | 1.819  (wrong) |
-| Cascadia Mono | 8.20 px | 14.00 px | 1.707 (wrong) |
-| MS Gothic / NSimSun / SimSun | 7.00 px | 14.00 px | 2.000 (right) |
+A terminal gives every character one cell (two for wide characters), and it draws
+box-drawing characters (`|`, `-`, corners) in **one** cell. Measured at 14 px on
+this machine:
 
-So the default stack starts with `MS Gothic` / `NSimSun`, which are exact on
-Windows. That works, but it depends on the machine: on Linux, or on a Windows
-without those fonts, the stack silently falls back to a 1.8-ratio font and the
-same misalignment returns.
+| family | `M` | `中` | `|` `-` corners | ratio CJK/M |
+|---|---|---|---|---|
+| Consolas | 7.70 | 14.00 | **7.70** | 1.819 |
+| Cascadia Mono | 8.20 | 14.00 | 8.20 | 1.707 |
+| NSimSun / SimSun / SimHei / MS Gothic | 7.00 | 14.00 | **14.00** | 2.000 |
+| Microsoft YaHei (the font proJV ships) | 13.68 | 14.00 | 9.92 | 1.023 |
+| DengXian | 12.11 | 14.00 | 14.00 | 1.156 |
 
-Shipping one font removes the dependency. **Do not commit a Microsoft font**: the
-Windows fonts may not be redistributed. Use an openly licensed CJK monospace,
-for example:
+Read the `|` column: in a Chinese or Japanese font the box-drawing characters are
+**full width (14 px) although the terminal reserves one cell (7 px)**. Each border
+character then bleeds into the next cell, and the frame looks shifted - which is
+exactly "the separators break when Chinese appears", and why switching the whole
+terminal to MS Gothic made it worse instead of better.
 
-- Sarasa Mono SC (SIL OFL) - designed 2:1, the best fit for a terminal
-- Maple Mono NF CN (SIL OFL)
-- Noto Sans Mono CJK SC (SIL OFL)
+No single installed font satisfies both conditions, so the default stack mixes
+them:
 
-Then set `font_family` in `config.toml` if you want a specific fallback order:
-
-```toml
-font_family = "OstlrMono, Consolas, monospace"
+```
+Consolas, "Cascadia Mono", "Microsoft YaHei", "NSimSun", "MS Gothic", monospace
 ```
 
-The terminal measures the ratio at startup and writes the result to the status
-bar (`font ok` / `font ratio 1.82`), so a wrong font is visible instead of
-looking like a rendering bug.
+- **Consolas first**: ASCII *and* box-drawing come from it, one cell wide, so the
+  frame stays on the grid (this is also what Windows Terminal does, and why proJV
+  looks right there).
+- **"Microsoft YaHei" second**: Chinese is drawn with YaHei's glyph shapes - the
+  same face proJV bundles - so the text looks like proJV's.
+- The CJK glyph is 14 px inside a 15.4 px two-cell box: a small gap, not a shift.
+
+Microsoft YaHei itself cannot be the terminal font: at 13.68 px per ASCII cell it
+is proportional, so the grid would be meaningless.
+
+## If you drop a file here
+
+It becomes the first CJK fallback (after the western mono), so:
+
+- a **CJK monospace** (Sarasa Mono SC, Maple Mono NF CN, Noto Sans Mono CJK SC -
+  all SIL OFL) is what belongs here;
+- a proportional font (YaHei, Segoe UI) will not fix anything and cannot be the
+  primary face;
+- a Microsoft font may not be redistributed, so none is committed to this repo.
+  Using one locally is fine; `config.toml` can name it directly:
+
+```toml
+font_family = "Consolas, \"Microsoft YaHei\", monospace"
+```

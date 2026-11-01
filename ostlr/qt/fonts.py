@@ -22,9 +22,22 @@ from typing import Optional, Tuple
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONT_DIR = os.path.join(HERE, "fonts")
 
-# Exact 2:1 families first. Consolas stays as the last resort: it is available
-# everywhere on Windows, it just cannot be the primary face next to Chinese.
-DEFAULT_FAMILY = ('MS Gothic, NSimSun, SimSun, Consolas, "Cascadia Mono", monospace')
+# The stack has to mix two fonts, because no single installed font is right:
+#
+#   family                     M(ASCII)  CJK     bar/line/corner
+#   MS Gothic / NSimSun / SimHei   7.00   14.00   14.00   <- box chars are FULL width
+#   Consolas                       7.70   14.00    7.70   <- box chars are one cell
+#   Microsoft YaHei (proJV ships) 13.68   14.00    9.92   <- proportional, unusable
+#
+# A terminal gives a box-drawing character ONE cell. In a CJK font that glyph is
+# drawn two cells wide, so every `|`, `-`, corner shifts the rest of the line by a
+# cell - which is exactly "the separators break when Chinese appears". Putting a
+# western monospace first fixes the frame (bar == M == 7.70) and lets Chinese fall
+# back to a CJK face (14.00: a small gap inside its two-cell box, but no shift).
+#
+# This is also what Windows Terminal does, and why proJV looks right there.
+DEFAULT_FAMILY = ('Consolas, "Cascadia Mono", "Microsoft YaHei", "NSimSun", '
+                  '"MS Gothic", monospace')
 
 _FONT_SUFFIXES = (".ttf", ".otf", ".ttc")
 
@@ -47,12 +60,20 @@ def bundled_font(directory: Optional[str] = None) -> str:
 
 
 def family_for(cfg=None, directory: Optional[str] = None) -> str:
-    """The CSS font stack: bundled font first, then the exact system families."""
+    """The CSS font stack: bundled CJK face appended, western mono first.
+
+    A bundled font becomes the CJK fallback, not the primary face: making it
+    primary would take the box-drawing characters from it, and in a CJK font those
+    are full width - the frame would shift by one cell per line.
+    """
     configured = str(getattr(cfg, "font_family", "") or "").strip() if cfg else ""
+    base = configured or DEFAULT_FAMILY
     if bundled_font(directory):
-        base = 'OstlrMono, ' + (configured or DEFAULT_FAMILY)
-    else:
-        base = configured or DEFAULT_FAMILY
+        parts = [p.strip() for p in base.split(",") if p.strip()]
+        if "OstlrMono" not in base:
+            # After the western mono, before the generic families.
+            parts.insert(1, "OstlrMono")
+        base = ", ".join(parts)
     return base
 
 

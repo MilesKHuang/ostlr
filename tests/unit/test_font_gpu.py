@@ -17,25 +17,37 @@ from ostlr.qt import fonts, procstat
 
 
 class TestFontContract(unittest.TestCase):
-    def test_the_default_stack_starts_with_an_exact_2to1_family(self):
-        # Measured at 14 px: Consolas 7.70/14.00 = 1.819 (drifts), MS Gothic and
-        # NSimSun 7.00/14.00 = 2.000 (exact). The first family must be one of the
-        # exact ones, or the grid lies.
+    def test_the_first_family_is_a_western_monospace(self):
+        # Box-drawing characters must come from a font where they are ONE cell.
+        # In every CJK font measured here they are two cells (14 px vs 7 px), and
+        # each border then bleeds into the next cell - the reported symptom.
         family = fonts.family_for(config.Config())
         first = family.split(",")[0].strip().strip('"')
-        self.assertIn(first, ("MS Gothic", "NSimSun", "SimSun", "OstlrMono"), family)
+        self.assertIn(first, ("Consolas", "Cascadia Mono"), family)
+
+    def test_a_cjk_face_is_in_the_stack(self):
+        # Chinese still has to be drawn by a font that has it, or the glyphs come
+        # from a random fallback.
+        family = fonts.family_for(config.Config())
+        self.assertTrue(any(name in family for name in
+                            ("Microsoft YaHei", "NSimSun", "SimSun", "MS Gothic")),
+                        family)
 
     def test_a_configured_family_wins(self):
         cfg = config.Config()
-        cfg.font_family = "Sarasa Mono SC, Consolas"
-        self.assertEqual("Sarasa Mono SC, Consolas", fonts.family_for(cfg))
+        cfg.font_family = "Consolas, Sarasa Mono SC"
+        self.assertEqual("Consolas, Sarasa Mono SC", fonts.family_for(cfg))
 
-    def test_a_bundled_font_is_prepended(self):
+    def test_a_bundled_font_becomes_the_cjk_fallback_not_the_primary(self):
+        # Making it primary would take the box-drawing glyphs from it, and in a
+        # CJK font those are full width.
         with tempfile.TemporaryDirectory() as tmp:
             open(os.path.join(tmp, "SarasaMono.ttc"), "wb").close()
             self.assertTrue(fonts.bundled_font(tmp).endswith("SarasaMono.ttc"))
             family = fonts.family_for(config.Config(), tmp)
-        self.assertTrue(family.startswith("OstlrMono"), family)
+        first = family.split(",")[0].strip()
+        self.assertNotEqual("OstlrMono", first, family)
+        self.assertIn("OstlrMono", family)
 
     def test_an_empty_directory_reports_no_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
