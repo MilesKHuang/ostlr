@@ -154,7 +154,4 @@ py -3 tools\parity_probe.py            # frame gaps and gauge fill, real pane
 
 ---
 
-Powered by [proJV](https://github.com/MilesKHuang/proJV) - a native C++ AI agent
-for the terminal, and the reason this panel exists. It is also the one CLI seen
-emitting OSC 7501 so far, which is why its rows can say `blocked` while a plain
-shell's cannot.
+Powered by [proJV](https://github.com/MilesKHuang/proJV)
