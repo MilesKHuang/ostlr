@@ -21,10 +21,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from . import schema
+from . import ladder, schema
 from .ui import rows as ui_rows
 from .ui import theme
-
 # mirrors config.py (dev_1 owns the constant; hardcoded here on purpose)
 CLIP_CHARS = schema.CLIP_CHARS
 LIST_CAP = schema.LIST_CAP
@@ -72,12 +71,11 @@ def clip(text: Any, limit: int = CLIP_CHARS) -> str:
 def format_waiting(seconds: Optional[int]) -> str:
     """`0s`-`59s` in seconds, `>= 60s` in minutes (plan 8.3)."""
     if seconds is None:
-        return "waiting \u2014"
+        return "waiting ?"
     s = max(0, _as_int(seconds, 0))
     if s < 60:
         return "waiting %ds" % s
     return "waiting %dm" % (s // 60)
-
 
 def format_elapsed(seconds: Optional[int]) -> str:
     """Session age: 42s, 3m, 2h05m."""
@@ -174,7 +172,7 @@ def order(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # --- row building ---------------------------------------------------------
 
 def build_row(session: Dict[str, Any], state_row: Dict[str, Any],
-              branch: Any = None, now: int = 0) -> Dict[str, Any]:
+              branch: Any = None, now: int = 0, cfg: Any = None) -> Dict[str, Any]:
     """Merge one session with its store row into a schema v1 row.
 
     `session` supplies the facts (pid, agent, project, cwd, memory); `state_row`
@@ -188,6 +186,16 @@ def build_row(session: Dict[str, Any], state_row: Dict[str, Any],
     transient = state_row.get("transient") or None
     state_since = _as_int(state_row.get("state_since"), 0)
 
+    # The choke point: a stale L2 record can never keep its state, so a row
+    # cannot render `idle` from a 200 s old file. `combine()` already does this
+    # for the live path; this covers a store row, a fixture or a hand-built
+    # dict, which is where the verifier found the leak.
+    effective = ladder.effective_state(state, source, state_row.get("age_s"), cfg)
+    state = effective["state"]
+    source = effective["source"]
+    if effective["reason"]:
+        state_row = dict(state_row)
+        state_row["reason"] = effective["reason"]
     elapsed = None
     if started_at > 0 and now > 0:
         elapsed = max(0, now - started_at)
@@ -282,6 +290,11 @@ def receipt(kind: str, path: str, agent: str, project: str,
     """The three-part receipt for a copy or an injection.
 
     `copied <path> -> <agent> / <project> (same project | cross project | no target)`
+
+    The WHOLE string is clipped to `clip_chars`, and the clip keeps the tail:
+    the target and the same/cross-project verdict are the part that prevents
+    pasting into the wrong window, so a long path must lose its middle, never
+    its destination.
     """
     target = "%s / %s" % (agent or "?", project or "?")
     if same_project is None:
@@ -290,7 +303,13 @@ def receipt(kind: str, path: str, agent: str, project: str,
         suffix = "same project"
     else:
         suffix = "cross project"
-    return "%s %s -> %s (%s)" % (kind, clip(path), target, suffix)
+    tail = " -> %s (%s)" % (target, suffix)
+    head = "%s " % kind
+    budget = CLIP_CHARS - len(head) - len(tail) - 1  # 1 for the ellipsis
+    if budget < 0:
+        # Even the tail does not fit: keep the tail, it is the load-bearing part.
+        return (head + tail)[:CLIP_CHARS]
+    return head + clip(path, budget) + tail
 
 
 def status_bar(receipt_text: str = "", receipt_age_s: Optional[int] = None,
@@ -337,7 +356,8 @@ def build_snapshot(sessions: Sequence[Dict[str, Any]],
                    state_rows: Sequence[Dict[str, Any]],
                    branches: Optional[Dict[str, str]] = None,
                    now: int = 0,
-                   list_cap: int = LIST_CAP) -> Dict[str, Any]:
+                   list_cap: int = LIST_CAP,
+                   cfg: Any = None) -> Dict[str, Any]:
     """Build the v1 envelope from sessions + store rows.
 
     `state_rows` are the store's published rows; a session with no matching row
@@ -366,7 +386,7 @@ def build_snapshot(sessions: Sequence[Dict[str, Any]],
         state_row = by_identity.get((pid, started_at)) or by_pid.get(pid) or {}
         cwd = _as_text(session.get("cwd"))
         branch = branch_map.get(cwd, session.get("branch"))
-        built.append(build_row(session, state_row, branch=branch, now=now))
+        built.append(build_row(session, state_row, branch=branch, now=now, cfg=cfg))
 
     ordered = order(built)
     header = header_for(ordered)

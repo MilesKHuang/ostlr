@@ -55,3 +55,28 @@
 - dev_2: T7, T10 done. Suite 72 tests OK, live 5 titled windows. Two self-caught defects (`starting` shared `fg_dim` with idle; a hex-ish example in a theme docstring).
 - test_1 (independent): **T7 PASS, T10 PASS** - own grep found hex only in `theme.py` (10 lines), zero Tk colour names, zero code font tuples, zero raw glyph literals; `STATE_MAP` 6 / `TRANSIENT_MAP` 1 disjoint codepoints and roles; 300-char path elides leaf-visible; markers survive at a 60 px budget; `role_for_state('done',1)` -> danger, `('done',0)` -> ok.
 - Open: T1/T2/T3 not yet independently verified -> test_2 in W2.
+
+**W2 dispatched**: dev_1 = T4, T5; dev_2 = T6, T8; test_2 = independent verify of T1, T2, T3.
+- test_2: **T2 PASS, T3 PASS, T1 FAIL** - `build_snapshot()` read the fixture and then returned `envelope(empty_header(), [])`, and `test_main_cli.py` asserted `rows == []`, i.e. the test locked the defect in. Fixture loader itself was honest (mutation of pid/cmdline/now propagated). T2: both CreationDate shapes, list/single/garbage, live 221 pids all `started_at>0`, forced stall 3.02 s; pwsh branch unverifiable here (no pwsh) -> SKIP. T3: exact sums, 41-chain walks 33, cap proven non-cosmetic (max_depth=2 -> 3 pids), cycle terminates, recycled pid one row.
+- dev_1 (T4/T5): returned BLOCKED - `sessions.py` corrupted by repeated failed edits (~20 duplicated blocks), one own test red (cycle 2 != 1).
+- dev_2 (T6/T8): done. 48 own tests green. Found a real Windows defect in its own code (os.replace raises PermissionError while another handle holds the target) and fixed it with a bounded retry rather than weakening the test.
+
+**W3 dispatched**: dev_1 = rewrite sessions.py + cycle fix; dev_2 = T9a, T9b + the T1 pipeline defect; test_1 = independent verify of T6, T8.
+- dev_1: sessions.py rewritten clean (262 lines, one copy of each block). Cycle root cause: `_same_agent_root` returned the pid itself on a cycle, so every member claimed root-ness; now returns -1 and the representative pass picks the lowest pid. Suite 266 tests OK; cycle -> 1 row, real 2-template parent/child -> 2 rows.
+- dev_2: T9a + T9b landed; `build_snapshot` is now the real pipeline (fixture and live). Also had to rewrite `tests/fixtures/snapshot_small.json`: it used CIM field names the normaliser rejected, so the pipeline had been seeing zero processes. Golden: 4 rows, `waiting 1 / running 1 (1 inferred) / done 1 / idle 1`, `sessions 4`, bucket sum asserted, `showing 60 of 75`, `done+exit=1 -> danger`, 120-char clip, `waiting 0s/59s/1m/2m`.
+- test_1: **T8 PASS** (no PIPE/DEVNULL/DETACHED anywhere in code; CREATE_NEW_CONSOLE at status.py:203; 200 concurrent writes clean). **T6 FAIL** - `already_exited` is set on the internal row but `snapshot()` returns the last published copy, and the next ladder verdict overwrites state/reason, so the read-back is False and the row never becomes done/already_exited while the pid is still in the sample.
+- Commit `fd60c2e` (baseline for later diffs; nothing was tracked before it, so the "was an assertion weakened" check was SKIP in W2).
+
+**W4 dispatched**: dev_2 = T6 fix (return 1) + T12 + T13; dev_1 = T11 + T16; test_2 = independent verify of T4/T5 and T9a/T9b.
+
+**W4 interrupted**: the skill run ended mid-wave (the harness process was terminated while W4 was in flight). State at interruption: T1-T3, T6-T13 and T16 committed or on disk, T14/T15/T17 on disk near-complete.
+
+**W5 (lead, after the interruption)**: finished the tail and re-verified independently rather than trusting the inherited board.
+- `py -3 -m unittest discover -s tests` -> **464 tests, OK** (19.6 s).
+- `py -3 -m unittest tests.unit.test_app_smoke tests.unit.test_app_headless -v` -> 43 tests OK, real Tk windows created, pumped with a bounded `update()` and destroyed; no test skipped, so the panel really builds.
+- `py -3 -m ostlr --once --json --fixture tests/fixtures/snapshot_small.json` -> 4 rows, `sessions 4 == waiting 1 + running 1 + done 1 + idle 1`; `done` + `exit_code 1` renders the danger role while JSON `state` stays `done`.
+- `py -3 -m ostlr --once --json` (live) -> 13 rows, all `unknown`, `sum7 == sessions`; honest per R2 with no L2 producer running.
+- `py -3 -m ostlr --selftest` -> 10 PASS + 1 SKIP (L1), exit 0; `--selftest --clipboard` -> writes, reads back the same path and restores the foreign clipboard.
+- `py -3 -m ostlr.status --state blocked --kind permission --pid 4 --msg probe-test` -> wrote a valid `4.json` (the MS1 producer path end to end).
+- Forbidden-API scan: no `DETACHED_PROCESS`, no `stdout=PIPE`, no `SendInput` / `keybd_event` anywhere; `taskkill /PID <pid> /T /F` only behind the identity guard.
+- Deleted the verifier scratch directory `_verify/`; nothing else was removed.

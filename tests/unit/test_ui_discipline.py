@@ -50,7 +50,6 @@ def _ui_sources():
                 out[name] = fh.read()
     return out
 
-
 class TestNoStrayLiterals(unittest.TestCase):
     def setUp(self):
         self.sources = _ui_sources()
@@ -163,7 +162,9 @@ class TestTypeScale(unittest.TestCase):
         self.assertEqual(type_mod.MONO[1], 9)
 
     def test_as_tk(self):
-        self.assertEqual(type_mod.as_tk(type_mod.ROW), "Segoe UI 10 normal")
+        # The family is braced: Tk reads an unbraced "Segoe UI 9 normal" as
+        # family "Segoe", size "UI" and raises TclError at the first widget.
+        self.assertEqual(type_mod.as_tk(type_mod.ROW), "{Segoe UI} 10 normal")
 
 
 class TestThemeRoles(unittest.TestCase):
@@ -198,6 +199,35 @@ class TestRowsReexport(unittest.TestCase):
     def test_rows_reexports_maps(self):
         self.assertIs(rows.STATE_MAP, glyphs.STATE_MAP)
         self.assertIs(rows.TRANSIENT_MAP, glyphs.TRANSIENT_MAP)
+
+
+class TestLauncherDiscipline(unittest.TestCase):
+    """T14's dialog is a view too: no colour, font or glyph literal in it."""
+
+    def setUp(self):
+        repo = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(repo, "ostlr", "launcher.py")
+        with open(path, "r", encoding="utf-8") as handle:
+            self.source = handle.read()
+
+    def test_no_hex_colour(self):
+        self.assertEqual(HEX_RE.findall(self.source), [])
+
+    def test_no_tk_colour_name(self):
+        hits = [m.group(1) for m in TK_COLOR_RE.finditer(self.source)
+                if m.group(1).strip().lower() in TK_COLOR_NAMES]
+        self.assertEqual(hits, [])
+
+    def test_no_inline_font_tuple(self):
+        self.assertEqual(FONT_TUPLE_RE.findall(self.source), [])
+
+    def test_no_raw_glyph(self):
+        self.assertEqual(RAW_GLYPH_RE.findall(self.source), [])
+        self.assertEqual(ESCAPED_GLYPH_RE.findall(self.source), [])
+
+    def test_colours_come_from_theme(self):
+        # Every colour in the dialog is a theme role lookup.
+        self.assertIn("theme.role(", self.source)
 
 
 if __name__ == "__main__":

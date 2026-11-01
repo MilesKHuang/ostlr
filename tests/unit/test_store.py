@@ -90,6 +90,44 @@ class TestIntents(unittest.TestCase):
         row = store.row_for(9, 1000)
         self.assertEqual(row["reason"], "already_exited")
 
+    def test_already_exited_is_visible_immediately_and_survives_a_verdict(self):
+        """The verifier's exact sequence (T6 return 1).
+
+        The flag must be readable from `snapshot()` right after
+        `apply_intents()`, and a later ladder verdict must not turn the
+        incarnation back into `working` while its pid is still in the sample.
+        """
+        store = Store()
+        store.observe([session(7, started_at=100)], {7: verdict("working")}, now=1000)
+        store.submit_intent("already_exited", pid=7, started_at=100, now=1050)
+        store.apply_intents()
+
+        row = store.snapshot()[0]
+        self.assertTrue(row["already_exited"])
+        self.assertEqual(row["state"], "done")
+        self.assertEqual(row["reason"], "already_exited")
+        self.assertFalse(row["alive"])
+
+        # The pid is still present in the next sample and the ladder still says
+        # `working`: the exit wins.
+        store.observe([session(7, started_at=100)], {7: verdict("working")}, now=1060)
+        row = store.snapshot()[0]
+        self.assertTrue(row["already_exited"])
+        self.assertEqual(row["state"], "done")
+        self.assertEqual(row["reason"], "already_exited")
+        self.assertFalse(row["alive"])
+
+    def test_already_exited_preserves_a_known_exit_code(self):
+        store = Store()
+        store.observe([session(7, started_at=100)],
+                      {7: verdict("done", exit_code=3)}, now=1000)
+        store.submit_intent("already_exited", pid=7, started_at=100, now=1050)
+        store.apply_intents()
+        store.observe([session(7, started_at=100)], {7: verdict("working")}, now=1060)
+        row = store.snapshot()[0]
+        self.assertEqual(row["exit_code"], 3)
+        self.assertEqual(row["state"], "done")
+
     def test_already_exited_for_unknown_pid_still_records(self):
         store = Store()
         store.submit_intent("already_exited", pid=55, started_at=1)

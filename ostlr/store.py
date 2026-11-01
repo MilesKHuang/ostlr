@@ -30,6 +30,8 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from . import ladder
+
 # mirrors schema.py (dev_1 owns the constants; hardcoded here on purpose)
 STATES = ("idle", "working", "blocked", "done", "error")
 
@@ -93,6 +95,7 @@ class Store:
         self._dirty: set = set()
         self._published: List[Dict[str, Any]] = []
         self._applied = 0
+        self._now = 0
 
     # --- config helpers ------------------------------------------------
     def _done_retain_s(self) -> int:
@@ -150,7 +153,17 @@ class Store:
         for item in batch:
             self._apply_one(item)
         self._applied += len(batch)
+        # Publish immediately: an intent's effect must be visible in
+        # `snapshot()` without waiting for the next `observe()`. Otherwise a
+        # caller that queues `already_exited` and reads the row back sees the
+        # old state, which is exactly the defect the verifier found.
+        if batch:
+            self._publish(self._last_now())
         return len(batch)
+
+    def _last_now(self) -> int:
+        """The clock the last publish used, so a publish never goes backwards."""
+        return self._now if self._now > 0 else int(time.time())
 
     def _apply_one(self, item: Dict[str, Any]) -> None:
         kind = item.get("kind")
@@ -241,7 +254,7 @@ class Store:
             now = int(time.time())
         now = _as_int(now, 0)
         ladder_results = ladder_results or {}
-
+        self._now = now
         seen: set = set()
         for session in sessions or []:
             if not isinstance(session, dict):
@@ -274,9 +287,22 @@ class Store:
             # fields are known - not at row creation, when they are still empty.
             self._adopt_slot(row)
 
+            # An incarnation we already know has exited must not be turned back
+            # into `working` by a later verdict while its pid is still in the
+            # sample (a recycled pid, or a producer that keeps reporting). The
+            # exit is the more specific fact, so it wins.
+            if row.get("already_exited"):
+                row["state"] = "done"
+                row["source"] = "l2"
+                row["reason"] = "already_exited"
+                row["alive"] = False
+                if row.get("died_at") in (0, None):
+                    row["died_at"] = now
+                row["dirty"] = False
+                continue
+
             self._set_state(row, verdict, now)
             row["dirty"] = False
-
         # Anything we knew about that is absent from this sample is dead.
         # A row still marked `starting` is exempt: the launcher queued it before
         # the child existed, so one tick of absence is expected, not a death.
@@ -348,6 +374,17 @@ class Store:
         if source not in ("l2", "l3", "none"):
             source = "none"
 
+        # The same choke point the view model uses: a stale L2 verdict can never
+        # keep its state, so the store cannot publish `idle` from a 200 s old
+        # record either. Fixing only one of the two call sites would leave the
+        # never-idle rule broken on the other path.
+        effective = ladder.effective_state(state, source, verdict.get("age_s"),
+                                           self.cfg)
+        state = effective["state"]
+        source = effective["source"]
+        if effective["reason"]:
+            verdict = dict(verdict)
+            verdict["reason"] = effective["reason"]
         previous = row.get("state")
         if state != previous:
             row["state_since"] = now

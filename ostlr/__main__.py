@@ -1,12 +1,12 @@
 """Ostlr entry point.
 
-    py -3 -m ostlr                      # the panel (T11 wires it)
+    py -3 -m ostlr                      # the panel
     py -3 -m ostlr --once [--json]      # one snapshot to stdout, then exit
     py -3 -m ostlr --once --json --fixture <path>
-    py -3 -m ostlr --selftest           # headless PASS/FAIL/SKIP lines
-    py -3 -m ostlr run -- <cmd>         # the producer wrapper (T8)
+    py -3 -m ostlr --selftest [--clipboard]
+    py -3 -m ostlr run -- <cmd>         # the producer wrapper
 
-Two rules this file exists to keep:
+Three rules this file exists to keep:
 
   * `--once --json` prints exactly ONE JSON object on stdout and nothing else.
     Diagnostics go to stderr, so a verifier can pipe stdout straight into a JSON
@@ -14,27 +14,33 @@ Two rules this file exists to keep:
   * A fixture is an *input*, not an answer key: `--fixture` loads the recorded
     snapshot and runs the same pipeline on it, so the deterministic check and
     the live check exercise one code path.
-
-The pipeline itself (sessions -> ladder -> view model) lands in later waves; the
-loader and the wiring are here now so those waves only fill in a function.
+  * `main()` never enters a mainloop unless it was asked to open the panel. A
+    test that calls `main([])` must be able to assert the wiring without a
+    window, so the panel runner is injectable and `OSTLR_NO_PANEL=1` refuses to
+    open one at all.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import config as config_mod
 from . import ladder, paths, schema, sessions as sessions_mod, store as store_mod
 from . import view_model
-from .probe import cim, l2, l3, procs
+from .probe import cim, l2, l3
 
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_NOT_BUILT = 3
+
+# Set this to 1 to make `main([])` refuse to open a window. A test uses it so a
+# stray `main([])` can never block the suite in a Tk mainloop.
+ENV_NO_PANEL = "OSTLR_NO_PANEL"
 
 
 # --- fixture --------------------------------------------------------------
@@ -224,20 +230,23 @@ def cmd_once(cfg: config_mod.Config, as_json: bool,
     return EXIT_OK
 
 
-def cmd_selftest(cfg: config_mod.Config) -> int:
-    """Headless checks. One line each; SKIP is not a failure."""
-    resolved = paths.describe()
-    print("PASS paths config=%s" % resolved["config"])
-    print("PASS paths status=%s" % resolved["status"])
-    print("PASS paths logs=%s" % resolved["logs"])
-    print("PASS config tick_s=%d cim_timeout_ms=%d" % (cfg.tick_s, cfg.cim_timeout_ms))
+def cmd_selftest(cfg: config_mod.Config, clipboard: bool = False) -> int:
+    """Headless checks. One line each; SKIP is not a failure.
+
+    The checks themselves live in `ostlr.selftest` so the panel, the CLI and a
+    test all run the same code. This function only adds the config lines, which
+    need the loaded config.
+    """
+    from . import selftest as selftest_mod
+
     if cfg.load_error:
         print("SKIP config: %s" % cfg.load_error)
     else:
         print("PASS config loaded from %s" % (cfg.path or "(defaults)"))
-    print("SKIP panel: not built yet (T11)")
-    print("SKIP run wrapper: not built yet (T8)")
-    return EXIT_OK
+    print("PASS config tick_s=%d cim_timeout_ms=%d"
+          % (cfg.tick_s, cfg.cim_timeout_ms))
+
+    return selftest_mod.run(clipboard=clipboard)
 
 
 def cmd_run(argv: Sequence[str]) -> int:
@@ -247,11 +256,29 @@ def cmd_run(argv: Sequence[str]) -> int:
     return status_mod.run(argv)
 
 
-def cmd_panel(cfg: config_mod.Config) -> int:
-    """The Tk panel (T11). Not built yet - a clear message, not a traceback."""
-    print("[ostlr] the panel is not built yet (T11). "
-          "Use --once --json or --selftest for now.", file=sys.stderr)
-    return EXIT_NOT_BUILT
+def cmd_panel(cfg: config_mod.Config,
+              panel_runner: Optional[Callable[[config_mod.Config], int]] = None) -> int:
+    """Open the Tk panel and block on its mainloop.
+
+    `panel_runner` is the injection point a test uses: it receives the config and
+    returns an exit code, so the wiring can be asserted without a window. The
+    environment variable `OSTLR_NO_PANEL=1` refuses to open one at all, which is
+    the belt to that brace - a stray `main([])` in a test can never hang.
+    """
+    if panel_runner is not None:
+        return panel_runner(cfg)
+
+    if os.environ.get(ENV_NO_PANEL) == "1":
+        print("[ostlr] %s=1: not opening the panel" % ENV_NO_PANEL, file=sys.stderr)
+        return EXIT_NOT_BUILT
+
+    from .ui import app as app_mod
+
+    ok, reason = app_mod.tk_available()
+    if not ok:
+        print("[ostlr] no display: %s" % reason, file=sys.stderr)
+        return EXIT_NOT_BUILT
+    return app_mod.run_panel(cfg)
 
 
 # --- argparse -------------------------------------------------------------
@@ -269,6 +296,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="with --once: read a recorded snapshot instead of probing")
     parser.add_argument("--selftest", action="store_true",
                         help="run headless checks and print PASS/FAIL/SKIP lines")
+    parser.add_argument("--clipboard", action="store_true",
+                        help="with --selftest: also check the clipboard round trip")
     parser.add_argument("--config", metavar="PATH", default=None,
                         help="config file to use instead of the default")
     parser.add_argument("command", nargs="?", default="panel",
@@ -278,12 +307,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None,
+         panel_runner: Optional[Callable[[config_mod.Config], int]] = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = config_mod.load(args.config)
 
     if args.selftest:
-        return cmd_selftest(cfg)
+        return cmd_selftest(cfg, clipboard=args.clipboard)
 
     if args.command == "run":
         rest = list(args.rest)
@@ -299,7 +329,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("[ostlr] --json and --fixture require --once", file=sys.stderr)
         return EXIT_USAGE
 
-    return cmd_panel(cfg)
+    return cmd_panel(cfg, panel_runner=panel_runner)
 
 
 if __name__ == "__main__":

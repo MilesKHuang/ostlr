@@ -64,8 +64,8 @@ class TestWaitingRule(unittest.TestCase):
         self.assertEqual(vm.format_waiting(60), "waiting 1m")
         self.assertEqual(vm.format_waiting(125), "waiting 2m")
 
-    def test_unknown_is_an_em_dash(self):
-        self.assertEqual(vm.format_waiting(None), "waiting \u2014")
+    def test_unknown_is_a_question_mark(self):
+        self.assertEqual(vm.format_waiting(None), "waiting ?")
 
     def test_negative_clamps(self):
         self.assertEqual(vm.format_waiting(-5), "waiting 0s")
@@ -264,8 +264,17 @@ class TestReceipts(unittest.TestCase):
         self.assertEqual(none, "copied D:/ws/projV/main.cpp -> ? / ? (no target)")
 
     def test_receipt_is_clipped(self):
+        # The WHOLE receipt is clipped to 120 chars, and the tail survives: the
+        # target and the same/cross verdict are what stop a wrong-window paste.
         out = vm.receipt("copied", "D:/" + "x" * 400, "claude", "projV", True)
-        self.assertLessEqual(len(out), 120 + 40)
+        self.assertLessEqual(len(out), 120)
+        self.assertTrue(out.endswith("-> claude / projV (same project)"), out)
+        self.assertTrue(out.startswith("copied D:/"), out)
+
+    def test_receipt_tail_survives_a_huge_path(self):
+        out = vm.receipt("copied", "D:/" + "y" * 5000, "codex", "sop-test", False)
+        self.assertLessEqual(len(out), 120)
+        self.assertIn("(cross project)", out)
 
 
 class TestStatusBar(unittest.TestCase):
@@ -314,6 +323,71 @@ class TestHint(unittest.TestCase):
         row = vm.build_row(session(1, started_at=0), state_row(1, started_at=0,
                                                                state="working"), now=1000)
         self.assertIn("identity unverified", row["hint"])
+
+
+class TestNeverIdle(unittest.TestCase):
+    """The never-idle rule, proven through BOTH downstream call sites.
+
+    `ladder.combine` is correct on its own; the leak the verifier found was
+    downstream, where a stale L2 verdict was copied verbatim. These tests walk
+    the whole (state x age x source) grid through `build_snapshot` and through
+    `store.observe`, so fixing one path and leaving the other cannot pass.
+    """
+
+    STATES = ("idle", "working", "blocked", "done", "error", "unknown")
+    AGES = (0, 1, 89, 90, 91, 200, 600)
+    SOURCES = ("l2", "l3", "none")
+
+    def _session(self):
+        return session(1, started_at=1)
+
+    def test_build_snapshot_never_returns_idle_without_a_fresh_l2(self):
+        for state in self.STATES:
+            for age in self.AGES:
+                for source in self.SOURCES:
+                    with self.subTest(state=state, age=age, source=source):
+                        row = {"pid": 1, "started_at": 1, "state": state,
+                               "source": source, "age_s": age,
+                               "reason": "stale status file %d" % age}
+                        env = vm.build_snapshot([self._session()], [row], now=1002)
+                        got = env["rows"][0]
+                        if got["state"] == "idle":
+                            self.assertEqual(source, "l2")
+                            self.assertLessEqual(age, 90)
+
+    def test_store_observe_never_returns_idle_without_a_fresh_l2(self):
+        from ostlr.store import Store
+
+        for state in self.STATES:
+            for age in self.AGES:
+                for source in self.SOURCES:
+                    with self.subTest(state=state, age=age, source=source):
+                        store = Store()
+                        store.observe([self._session()],
+                                      {1: {"state": state, "source": source,
+                                           "age_s": age,
+                                           "reason": "stale status file %d" % age}},
+                                      now=1002)
+                        got = store.snapshot()[0]
+                        if got["state"] == "idle":
+                            self.assertEqual(source, "l2")
+                            self.assertLessEqual(age, 90)
+
+    def test_the_verifier_repro(self):
+        # The exact case: a 200 s old L2 record that says idle.
+        row = {"pid": 1, "started_at": 1, "state": "idle", "source": "l2",
+               "age_s": 200, "reason": "stale status file 200"}
+        env = vm.build_snapshot([self._session()], [row], now=1002)
+        got = env["rows"][0]
+        self.assertEqual(got["state"], "unknown")
+        self.assertEqual(got["source"], "none")
+        self.assertIn("stale", got["reason"])
+
+    def test_a_fresh_l2_idle_is_still_idle(self):
+        row = {"pid": 1, "started_at": 1, "state": "idle", "source": "l2",
+               "age_s": 5, "reason": ""}
+        env = vm.build_snapshot([self._session()], [row], now=1002)
+        self.assertEqual(env["rows"][0]["state"], "idle")
 
 
 class TestGolden(unittest.TestCase):

@@ -120,6 +120,63 @@ class TestBuildSessions(unittest.TestCase):
         self.assertEqual(built[0]["template_id"], agents.UNKNOWN_ID)
         self.assertEqual(built[0]["agent"], agents.UNKNOWN_ID)
 
+    def test_reported_unknown_child_is_a_row(self):
+        """The verifier's defect: a producer's record beats our exe-name guess.
+
+        An unknown-template process whose parent IS in the sample used to be
+        dropped as a helper, so a wrapper script or a node launcher could never
+        appear - and `ostlr.status --pid <pid>` was unreachable for exactly the
+        agents M1 exists to observe.
+        """
+        rows = [
+            row(50, 4, "C:\\bin\\pwsh.exe", "pwsh"),            # the parent
+            row(51, 50, "C:\\bin\\mystery.exe", "mystery --serve"),  # the child
+        ]
+        records = {51: {"pid": 51, "state": "blocked", "kind": "permission",
+                        "cwd": "D:/ws/x", "ts_epoch": 1, "msg": "t",
+                        "source": "ostlr-run", "exit_code": None}}
+        built = sessions.build_sessions(rows, records)
+        pids = [s["pid"] for s in built]
+        self.assertIn(51, pids)
+        child = [s for s in built if s["pid"] == 51][0]
+        self.assertEqual(child["template_id"], agents.UNKNOWN_ID)
+        self.assertEqual(child["cwd"], "D:/ws/x")
+
+    def test_unreported_unknown_child_is_still_suppressed(self):
+        """The helper rule survives: no record, live parent -> not a row."""
+        rows = [
+            row(60, 4, "C:\\bin\\pwsh.exe", "pwsh"),
+            row(61, 60, "C:\\bin\\mystery.exe", "mystery --serve"),
+        ]
+        built = sessions.build_sessions(rows, {})
+        pids = [s["pid"] for s in built]
+        self.assertNotIn(61, pids)
+        self.assertIn(60, pids)
+
+    def test_template_matched_child_is_still_a_row(self):
+        """No regression: a named agent under a shell stays its own session."""
+        rows = [
+            row(70, 4, "C:\\bin\\pwsh.exe", "pwsh"),
+            row(71, 70, "C:\\bin\\claude.exe", "claude"),
+        ]
+        built = sessions.build_sessions(rows, {})
+        pids = [s["pid"] for s in built]
+        self.assertIn(71, pids)
+        self.assertEqual([s for s in built if s["pid"] == 71][0]["template_id"],
+                         "claude")
+
+    def test_reported_child_of_a_root_is_a_row(self):
+        """Step 3's helper rule also yields to a producer's record."""
+        rows = [
+            row(80, 4, "C:\\bin\\claude.exe", "claude"),
+            row(81, 80, "C:\\bin\\mystery.exe", "mystery"),
+        ]
+        records = {81: {"pid": 81, "state": "working", "kind": "", "cwd": "",
+                        "ts_epoch": 1, "msg": "", "source": "ostlr-run",
+                        "exit_code": None}}
+        built = sessions.build_sessions(rows, records)
+        self.assertIn(81, [s["pid"] for s in built])
+
     def test_cwd_from_l2_then_cmdline_then_question(self):
         rows = [
             row(40, 4, "C:\\bin\\claude.exe", "claude"),

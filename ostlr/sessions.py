@@ -104,20 +104,24 @@ def _template_ids(by_pid: Dict[int, Dict[str, Any]]) -> Dict[int, str]:
 
 
 def _same_agent_root(pid: int, by_pid: Dict[int, Dict[str, Any]],
-                     template_ids: Dict[int, str]) -> int:
+                     template_ids: Dict[int, str],
+                     reported: Optional[set] = None) -> int:
     """Walk up to the highest ancestor that is still the same agent.
 
     A `claude` started by a shell is a child of that shell; the session is the
     claude process, not the shell. A `node` worker under claude is part of
     claude's tree, so the walk stops as soon as the parent is a different
     template. An unnamed process is never a root when it has a parent: it is a
-    helper of whatever started it.
+    helper of whatever started it - unless a producer reported it, in which case
+    it is a session in its own right.
     """
+    reported = reported or set()
     template_id = template_ids.get(pid, agents.UNKNOWN_ID)
     if template_id == agents.UNKNOWN_ID:
+        if pid in reported:
+            return pid
         parent = by_pid.get(int(by_pid[pid].get("ppid", 0)))
         return pid if parent is None else int(parent["pid"])
-
     current = pid
     seen = set()
     while True:
@@ -138,25 +142,42 @@ def _same_agent_root(pid: int, by_pid: Dict[int, Dict[str, Any]],
 
 
 def _select_roots(by_pid: Dict[int, Dict[str, Any]],
-                  template_ids: Dict[int, str]) -> List[int]:
-    """The pids that get a row, in ascending order. See the module docstring."""
+                  template_ids: Dict[int, str],
+                  reported: Optional[set] = None) -> List[int]:
+    """The pids that get a row, in ascending order. See the module docstring.
+
+    `reported` is the set of pids that have a FRESH L2 status record. Such a
+    process is always a row, whatever its template and whatever its parent: a
+    producer that wrote a record for it is telling us "this is a session", and
+    that is stronger evidence than our exe-name guess. Without this, a wrapper
+    script or a node/python launcher - exactly the agents M1 exists to observe -
+    could never appear, and `ostlr.status --pid <pid>` would be unreachable.
+    """
+    reported = reported or set()
+
     # 1. A process whose parent is a different agent is a root.
     roots: List[int] = []
     for pid in sorted(by_pid):
-        if _same_agent_root(pid, by_pid, template_ids) == pid:
+        if _same_agent_root(pid, by_pid, template_ids, reported) == pid:
             roots.append(pid)
 
-    # 2. An unnamed process with a parent in the sample is a helper, not a row.
+    # 2. An unnamed process with a parent in the sample is a helper, not a row -
+    #    UNLESS a producer reported it. The helper rule is what keeps a `node`
+    #    worker or a `git` call from becoming a row; the reported exception is
+    #    what keeps a real agent with an unrecognised exe name from vanishing.
     roots = [pid for pid in roots
              if template_ids[pid] != agents.UNKNOWN_ID
+             or pid in reported
              or int(by_pid[pid].get("ppid", 0)) not in by_pid]
 
     # 3. A root that is a child of another root is a helper of that session,
-    #    unless it is a named agent (a shell is a launcher, not the agent).
+    #    unless it is a named agent (a shell is a launcher, not the agent) or a
+    #    producer reported it.
     root_set = set(roots)
     roots = [pid for pid in roots
              if int(by_pid[pid].get("ppid", 0)) not in root_set
-             or template_ids[pid] != agents.UNKNOWN_ID]
+             or template_ids[pid] != agents.UNKNOWN_ID
+             or pid in reported]
 
     # 4. A cycle of same-template processes has no root by step 1, so the
     #    lowest pid of each uncovered group represents it. This runs last: an
@@ -191,7 +212,10 @@ def build_sessions(cim_rows: Sequence[Dict[str, Any]],
         return []
 
     template_ids = _template_ids(by_pid)
-    roots = _select_roots(by_pid, template_ids)
+    # A pid with a fresh L2 record is a session by definition: the producer
+    # knows what it is, even when our exe-name guess does not.
+    reported = {pid for pid in records if pid in by_pid}
+    roots = _select_roots(by_pid, template_ids, reported)
 
     out: List[Dict[str, Any]] = []
     for pid in roots:

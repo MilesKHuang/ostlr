@@ -255,18 +255,36 @@ class Heartbeat:
             self._thread.join(timeout=2.0)
 
 
-def run(argv: Sequence[str], status_dir: Optional[str] = None,
+def run(argv: Any, status_dir: Optional[str] = None,
         cwd: Optional[str] = None, heartbeat_s: float = HEARTBEAT_S) -> int:
     """Launch `argv` in its own console, report its life cycle, return its code.
+
+    `argv` is EITHER a list of argv elements (the launcher's path: the template
+    already split exe from args) OR a single raw string (the restart path: the
+    raw CIM `CommandLine` must reach CreateProcess byte-identically). A list goes
+    to `Popen` as a list, a string as a string - never `shell=True`, and never a
+    split of a raw string, because splitting would break every quoted path with
+    a space in it.
 
     The wrapper's own pid is the session root the panel sees, so the status file
     is keyed to `os.getpid()` - not to the child's pid, which the panel would
     have to correlate.
     """
-    args = [str(a) for a in argv]
-    if not args:
-        print("[ostlr] run: no command given", file=sys.stderr)
-        return 2
+    if isinstance(argv, str):
+        # The raw-cmdline path. `Popen` on Windows hands a string straight to
+        # CreateProcess, which is exactly what preserves the quoting.
+        spawn_arg: Any = argv
+        label = argv
+        if not argv.strip():
+            print("[ostlr] run: no command given", file=sys.stderr)
+            return 2
+    else:
+        args = [str(a) for a in (argv or [])]
+        if not args:
+            print("[ostlr] run: no command given", file=sys.stderr)
+            return 2
+        spawn_arg = args
+        label = args[0]
 
     wrapper_pid = os.getpid()
     work_dir = cwd or os.getcwd()
@@ -280,11 +298,12 @@ def run(argv: Sequence[str], status_dir: Optional[str] = None,
     try:
         # No pipes: the child owns its console. A pipe here would both suppress
         # the child's rendering and die with us when the panel closes.
-        child = subprocess.Popen(args, cwd=work_dir, creationflags=_creation_flags())
+        child = subprocess.Popen(spawn_arg, cwd=work_dir,
+                                 creationflags=_creation_flags())
     except (OSError, ValueError) as exc:
         # Name the command: "cannot find the file specified" alone does not tell
         # the user which file, and the launcher's whole job is a readable reason.
-        reason = "%s: %s" % (args[0], _first_line(str(exc)) or "spawn failed")
+        reason = "%s: %s" % (label, _first_line(str(exc)) or "spawn failed")
         reason = reason[:CLIP_CHARS]
         try:
             write_status(wrapper_pid, "error", msg=reason, cwd=work_dir,

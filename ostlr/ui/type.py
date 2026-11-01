@@ -39,9 +39,12 @@ def spec(name: str) -> FontSpec:
 
 
 def as_tk(spec_tuple: FontSpec) -> str:
-    """Render a spec as a Tk font string ("Segoe UI 10 normal").
+    """Render a spec as a Tk font string ("{Segoe UI} 10 normal").
 
-    Kept here so no view has to know the tuple shape.
+    The family is BRACED on purpose. Tk parses an unbraced font string as
+    `family size style`, so "Segoe UI 9 normal" is read as family "Segoe",
+    size "UI" - which raises `TclError: expected integer but got "UI"` at the
+    first widget. Braces keep a multi-word family in one token.
     """
     family, size, style = spec_tuple
-    return "%s %d %s" % (family, size, style)
+    return "{%s} %d %s" % (family, size, style)

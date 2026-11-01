@@ -56,6 +56,54 @@ def _stale_s(cfg: Any) -> int:
         return _default_stale_s()
 
 
+def effective_state(state: Any, source: Any, age_s: Any,
+                    cfg: Any = None) -> Dict[str, Any]:
+    """The ONE choke point that re-derives a state from its provenance.
+
+    `combine()` is correct, but a verdict can also arrive from a store row, a
+    fixture or a caller that built the dict by hand. Copying `state` verbatim
+    from such a dict is how a STALE L2 record ends up rendering `idle` - the
+    exact thing the never-idle rule forbids. So every consumer passes its
+    (state, source, age_s) through here first.
+
+    The rule: a `source="l2"` state is only believable while the record is
+    fresh. Past `l2_stale_s` the state is `unknown` with the stale reason, no
+    matter what the record said. `l3` and `none` are already inference/absence,
+    so they pass through unchanged.
+    """
+    key = str(state or "unknown").strip().lower()
+    src = str(source or SOURCE_NONE).strip().lower()
+    if src not in (SOURCE_L2, SOURCE_L3, SOURCE_NONE):
+        src = SOURCE_NONE
+    if key not in ("idle", "working", "blocked", "done", "error", "unknown"):
+        key = "unknown"
+
+    try:
+        age = None if age_s is None else max(0, int(age_s))
+    except (TypeError, ValueError):
+        age = None
+
+    if src == SOURCE_L2 and age is not None and age > _stale_s(cfg):
+        return {
+            "state": "unknown",
+            "source": SOURCE_NONE,
+            "reason": "%s %d" % (REASON_STALE, age),
+            "age_s": age,
+        }
+    # `idle` is only ever a REPORT. L3 (a window title) cannot prove that
+    # nothing is happening, and `none` is the absence of data - so an `idle`
+    # arriving from either is a caller bug, and it degrades to `unknown` here
+    # rather than reaching the panel.
+    if key == "idle" and src != SOURCE_L2:
+        return {
+            "state": "unknown",
+            "source": SOURCE_NONE,
+            "reason": REASON_NO_DATA,
+            "age_s": age,
+        }
+    return {"state": key, "source": src, "reason": "", "age_s": age}
+
+
 def combine(l2_record: Optional[Dict[str, Any]],
             l3_title: Optional[str],
             alive: bool,

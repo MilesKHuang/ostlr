@@ -179,13 +179,38 @@ class TestSelftestAndStubs(unittest.TestCase):
     def test_selftest_exits_zero(self):
         code, out, err = run_cli(["--selftest"])
         self.assertEqual(code, 0, err)
-        self.assertIn("PASS paths config=", out)
-        self.assertIn("SKIP panel: not built yet (T11)", out)
+        self.assertIn("PASS paths config:", out)
+        self.assertIn("PASS config loaded from", out)
 
-    def test_panel_is_a_clear_message(self):
-        code, out, err = run_cli([])
+    def test_panel_wiring_without_a_window(self):
+        """The panel path is entered, but no window is opened.
+
+        `main([])` used to reach `run_panel` and block in the Tk mainloop, which
+        hung the whole suite. The runner is injectable now, so the wiring is
+        asserted here and the window is never created.
+        """
+        seen = {}
+
+        def fake_runner(cfg):
+            seen["cfg"] = cfg
+            return 42
+
+        code = cli.main([], panel_runner=fake_runner)
+        self.assertEqual(code, 42)
+        self.assertIsNotNone(seen.get("cfg"))
+
+    def test_no_panel_env_refuses_to_open_a_window(self):
+        old = os.environ.get(cli.ENV_NO_PANEL)
+        os.environ[cli.ENV_NO_PANEL] = "1"
+        try:
+            code, out, err = run_cli([])
+        finally:
+            if old is None:
+                os.environ.pop(cli.ENV_NO_PANEL, None)
+            else:
+                os.environ[cli.ENV_NO_PANEL] = old
         self.assertEqual(code, cli.EXIT_NOT_BUILT)
-        self.assertIn("not built yet", err)
+        self.assertIn(cli.ENV_NO_PANEL, err)
 
     def test_run_delegates_to_the_wrapper(self):
         # T8 landed: `run -- <cmd>` is the producer wrapper now, so a command

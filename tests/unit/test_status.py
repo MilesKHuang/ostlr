@@ -168,6 +168,78 @@ class TestWrapper(TempStatusDir):
         wrapper_pid = os.getpid()
         return code, status_mod.read_status(wrapper_pid, self.dir)
 
+    def test_list_argv_runs_a_real_child(self):
+        """The launcher's path: a LIST of argv elements must actually spawn.
+
+        A single joined string ("exe /t 60 /nobreak") is looked up by
+        CreateProcess as a file with that literal name -> WinError 2, which is
+        the defect the live smoke found.
+        """
+        code, rec = self._run(["cmd", "/c", "exit", "0"])
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["state"], "done")
+        self.assertEqual(rec["exit_code"], 0)
+
+    def test_list_argv_nonzero_exit(self):
+        code, rec = self._run(["cmd", "/c", "exit", "7"])
+        self.assertEqual(code, 7)
+        self.assertEqual(rec["state"], "done")
+        self.assertEqual(rec["exit_code"], 7)
+
+    def test_raw_string_argv_is_passed_as_a_string(self):
+        """The restart path: a raw command line reaches Popen as a STRING."""
+        seen = {}
+
+        class _Child:
+            pid = 1
+
+            def wait(self):
+                return 0
+
+        real_popen = status_mod.subprocess.Popen
+
+        def fake_popen(arg, **kwargs):
+            seen["arg"] = arg
+            seen["kwargs"] = kwargs
+            return _Child()
+
+        status_mod.subprocess.Popen = fake_popen
+        try:
+            code = status_mod.run('"C:\\Program Files\\a.exe" --flag',
+                                  status_dir=self.dir, cwd=self.dir,
+                                  heartbeat_s=0.2)
+        finally:
+            status_mod.subprocess.Popen = real_popen
+        self.assertEqual(code, 0)
+        self.assertIsInstance(seen["arg"], str)
+        self.assertEqual(seen["arg"], '"C:\\Program Files\\a.exe" --flag')
+        self.assertNotIn("shell", seen["kwargs"])
+
+    def test_list_argv_reaches_popen_as_a_list(self):
+        seen = {}
+
+        class _Child:
+            pid = 1
+
+            def wait(self):
+                return 0
+
+        real_popen = status_mod.subprocess.Popen
+
+        def fake_popen(arg, **kwargs):
+            seen["arg"] = arg
+            return _Child()
+
+        status_mod.subprocess.Popen = fake_popen
+        try:
+            status_mod.run(["cmd", "/c", "exit", "0"], status_dir=self.dir,
+                           cwd=self.dir, heartbeat_s=0.2)
+        finally:
+            status_mod.subprocess.Popen = real_popen
+        self.assertIsInstance(seen["arg"], list)
+        self.assertEqual(seen["arg"], ["cmd", "/c", "exit", "0"])
+
     def test_zero_exit_child(self):
         code, rec = self._run([sys.executable, "-c", "raise SystemExit(0)"])
         self.assertEqual(code, 0)
