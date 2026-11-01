@@ -65,8 +65,12 @@ class BlockedCase(unittest.TestCase):
 
 
 class TestBlockedChain(BlockedCase):
-    def test_the_waiting_gauge_counts_it(self):
-        self.assertIn("waiting 1", self.window.gauges.waiting.caption)
+    def test_the_waiting_count_reaches_the_tray_and_the_row(self):
+        # The global gauge row is gone (it was one of the two "useless panels");
+        # the count that matters lives in the row's state and the tray badge.
+        row = self.window.list.item(0).data(0x0100)
+        self.assertEqual("blocked", row["state"])
+        self.assertEqual(1, sum(1 for r in self.window.pane_rows() if r["state"] == "blocked"))
 
     def test_the_row_carries_the_state_for_the_delegate(self):
         # The glyph is painted by RowDelegate from the row dict; the item text
@@ -80,9 +84,11 @@ class TestBlockedChain(BlockedCase):
     def test_the_list_holds_only_owned_panes(self):
         self.assertEqual(1, self.window.list.count())
 
-    def test_the_detail_panel_shows_the_state_and_the_directory(self):
+    def test_selecting_a_row_reports_it_in_the_status_line(self):
+        # The detail pane was folded into the receipt line: selecting a row now
+        # says the same facts without spending a third of the window on them.
         self.window.list.setCurrentRow(0)
-        text = self.window.detail.text()
+        text = self.window.receipt
         self.assertIn("blocked", text)
         self.assertIn(r"D:\ws\projV", text)
         self.assertIn("l1", text)

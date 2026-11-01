@@ -120,8 +120,6 @@ class MainWindow(QMainWindow):
         self.receipt_label.setStyleSheet("color: %s;" % style.ROLES["fg_dim"])
         bar.addSpacing(12)
         bar.addWidget(self.receipt_label, 1)
-        self.gauges = gauge_mod.GaugeRow(self)
-        bar.addWidget(self.gauges)
         outer.addLayout(bar)
 
         self.banner_label = QLabel("", self)
@@ -168,12 +166,6 @@ class MainWindow(QMainWindow):
         self.tree.inject_path.connect(self.inject_path_into_pane)
         self.tree.copied.connect(lambda path: self._receipt_copy(path, from_tree=True))
         dock.addWidget(self.tree)
-        self.detail = QLabel("", dock)
-        self.detail.setWordWrap(True)
-        self.detail.setAlignment(Qt.AlignTop)
-        self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        dock.addWidget(self.detail)
-        dock.setSizes([520, 320])
         body.addWidget(dock)
 
         body.setStretchFactor(0, 0)   # session list keeps its width
@@ -309,26 +301,39 @@ class MainWindow(QMainWindow):
         """One row per owned pane, with its live state and workload.
 
         Correction 1: an external process is not a session here. If the panel did
-        not start it, the panel does not claim to manage it - and does not fill
-        the list with `unknown` rows it can do nothing about.
+        not start it, the panel does not claim to manage it.
+
+        The state comes from the pane's status record, and it is aged like any
+        other: past `l2_stale_s` the record is not believable and the row says
+        `unknown` instead of repeating a state nobody re-measured.
         """
         from .. import status as status_mod
+        from ..age import record_age
+        stale_after = int(getattr(self.cfg, "l2_stale_s", 90) or 90)
         rows: List[Dict[str, object]] = []
         for pane in self.panes:
             pid = int(getattr(pane, "session_pid", 0) or 0)
             if not pid:
                 continue
             record = status_mod.read_status(pid) or {}
+            age = record_age(record)
+            state = str(record.get("state") or "unknown")
+            source = str(record.get("source") or "none")
+            if not record:
+                state, source = "unknown", "none"
+            elif age is not None and age > stale_after:
+                state, source = "unknown", "none"
             stats = self.stats.get(pid) or {}
             rows.append({
                 "pid": pid,
-                "state": str(record.get("state") or "working"),
-                "source": str(record.get("source") or "ostlr-pane"),
+                "state": state,
+                "source": source,
                 "agent": pane.title,
                 "project": os.path.basename(pane.cwd or "") or "?",
                 "cwd": pane.cwd or "",
                 "msg": str(record.get("msg") or ""),
                 "kind": str(record.get("kind") or ""),
+                "age_s": age,
                 "cpu": stats.get("cpu"),
                 "mem": stats.get("mem"),
                 "gpu": stats.get("gpu"),
@@ -362,9 +367,7 @@ class MainWindow(QMainWindow):
 
         blocked = sum(1 for row in rows if row["state"] == "blocked")
         working = sum(1 for row in rows if row["state"] == "working")
-        self.gauges.update_from({"waiting": blocked, "running": working}, rows)
         self._render_banner(rows)
-        self._render_detail()
         self.tray.update(blocked, working)
 
     def _row_item(self, row: Dict[str, object]) -> QListWidgetItem:
@@ -385,21 +388,21 @@ class MainWindow(QMainWindow):
             view_model.unknown_banner(len(rows), unknown, len(rows) - unknown))
 
     def _render_detail(self) -> None:
+        """The selected pane, spelled out. One line in the receipt area.
+
+        The separate detail pane was one of the two "useless panels": it repeated
+        what the row already showed and ate a third of the window.
+        """
         row = self._selected_row()
         if not row:
-            self.detail.setText("No pane selected.\n\nStart a TUI from Files, "
-                                "then click its row.")
+            self._set_receipt("")
             return
-        lines = [str(row.get("agent")),
-                 "state   %s  (%s)" % (row["state"], row["source"]),
-                 "dir     %s" % (row.get("cwd") or "?"),
-                 "cpu     %s" % procstat.format_cpu(row.get("cpu")),
-                 "memory  %s  (%s)" % (procstat.format_mem(row.get("mem")),
-                                       view_model.format_mem(row.get("rss"))),
-                 "gpu     %s" % procstat.format_gpu(row.get("gpu"))]
-        if row.get("msg"):
-            lines.append("message %s" % str(row["msg"])[:120])
-        self.detail.setText("\n".join(lines))
+        self._set_receipt("%s  %s (%s)  dir %s  cpu %s  mem %s  gpu %s"
+                          % (row.get("agent"), row["state"], row.get("source"),
+                             row.get("cwd") or "?",
+                             procstat.format_cpu(row.get("cpu")),
+                             procstat.format_mem(row.get("mem")),
+                             procstat.format_gpu(row.get("gpu"))))
 
     # --- selection / receipts ---------------------------------------------
     def _selected_row(self):

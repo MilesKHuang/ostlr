@@ -119,6 +119,40 @@
   term.onData(function (data) { send({ k: data }); });
   term.onResize(function (size) { send({ r: [size.cols, size.rows] }); });
 
+  // --- diagnostics ---------------------------------------------------------
+  // `const term` is a lexical binding, not a window property, so runJavaScript
+  // cannot see it. Without this object every measurement from Python silently
+  // read zeros - which is worse than having no numbers at all. These counters are
+  // cheap, always on, and are what `--selftest` and the fps probe read.
+  window.ostlr = {
+    stats: { bytes: 0, writes: 0, since: performance.now(), lastWrite: 0,
+             maxGap: 0, parseMs: 0 },
+    write: function (b64) {
+      const s = this.stats;
+      const now = performance.now();
+      if (s.lastWrite) {
+        const gap = now - s.lastWrite;
+        if (gap > s.maxGap) s.maxGap = gap;
+      }
+      s.lastWrite = now;
+      window.writeB64(b64);
+      s.bytes += Math.floor(b64.length * 3 / 4);
+      s.writes += 1;
+    },
+    snapshot: function () {
+      const s = this.stats;
+      const elapsed = (performance.now() - s.since) / 1000;
+      return [term.cols, term.rows, s.bytes, s.writes,
+              elapsed > 0 ? s.writes / elapsed : 0, s.maxGap,
+              term.buffer.active.length, term.buffer.active.type];
+    },
+    reset: function () {
+      this.stats = { bytes: 0, writes: 0, since: performance.now(), lastWrite: 0,
+                     maxGap: 0, parseMs: 0 };
+      return true;
+    }
+  };
+
   let pending = null;
   new ResizeObserver(function () {
     if (pending) clearTimeout(pending);

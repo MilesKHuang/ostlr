@@ -95,8 +95,19 @@ class PtyBridge(QThread):
 
         try:
             pty = PTY(self._cols, self._rows)
+            # `appname` is the executable; `cmdline` is the ARGUMENT LIST ONLY.
+            # Passing the exe again makes Windows parse
+            # "python.exe python.exe script.py" and the child dies with a syntax
+            # error - which is how a TUI started with arguments (`codex --resume`)
+            # silently failed after 262 bytes of error text.
+            args = self._argv[1:]
+            quoted = []
+            for arg in args:
+                text = str(arg)
+                quoted.append('"%s"' % text if (" " in text and not text.startswith('"'))
+                              else text)
             pty.spawn(self._argv[0],
-                      cmdline=" ".join(self._argv) if len(self._argv) > 1 else None,
+                      cmdline=(" ".join(quoted) if quoted else None),
                       cwd=self._cwd)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -225,6 +236,8 @@ class TerminalPane(QWidget):
         self._buffer = bytearray()
         self._started = False
         self._flush_timer = None
+        self._beat_timer = None
+        self._last_data_at = time.time()
         self._last_grid = None
 
         layout = QVBoxLayout(self)
@@ -271,6 +284,11 @@ class TerminalPane(QWidget):
         self._flush_timer = QTimer(self)
         self._flush_timer.timeout.connect(self._flush)
         self._flush_timer.start(16)   # 60 Hz: batching, not one IPC per chunk
+        # A heartbeat independent of output: without it a quiet child never
+        # updates its record and the row says `working` until it goes stale.
+        self._beat_timer = QTimer(self)
+        self._beat_timer.timeout.connect(self.heartbeat)
+        self._beat_timer.start(2000)
 
     @staticmethod
     def _plausible(cols: int, rows: int) -> bool:
@@ -297,15 +315,30 @@ class TerminalPane(QWidget):
         self._report("working", "running in the panel")
 
     def heartbeat(self) -> None:
-        """Keep the record fresh while the child is alive and quiet."""
-        if self.session_pid:
-            self._report("working", "running in the panel")
+        """Report what the pane can actually observe: output or quiet.
+
+        "working" forever was the bug behind "it is idle but shows working": the
+        old heartbeat only ran when bytes arrived, so a quiet child kept the last
+        state for ever. A pane owns its PTY, so quiet is a measurement, not a
+        guess - it is safe to call that `idle`, and it is the only way the row can
+        ever stop saying working.
+        """
+        quiet_for = time.time() - self._last_data_at
+        if quiet_for < 2.0:
+            self._report("working", "output flowing")
+        else:
+            self._report("idle", "quiet for %ds" % int(quiet_for))
 
     def _report(self, state: str, msg: str, exit_code=None) -> None:
         if not self.session_pid:
             return
         try:
             from .. import status as status_mod
+            existing = status_mod.read_status(self.session_pid)
+            # An L1 report outranks the pane's own guess: if the CLI told us what
+            # it is doing, do not paper over it with "working in the panel".
+            if existing and str(existing.get("source")) == "l1":
+                return
             status_mod.write_status(self.session_pid, state, msg=msg,
                                     cwd=self.cwd or os.getcwd(), exit_code=exit_code,
                                     source="ostlr-pane")
@@ -339,10 +372,15 @@ class TerminalPane(QWidget):
             self._pending.append(chunk)
             return
         # Coalesce: the 16 ms flush timer pushes one JS call per frame.
+        self._last_data_at = time.time()
         self._buffer.extend(chunk)
 
     def _push(self, chunk: bytes) -> None:
-        self.view.page().runJavaScript("window.writeB64 && window.writeB64('%s')" % _b64(chunk))
+        # Through `window.ostlr.write` so the page keeps its own counters: the
+        # only place that can say whether bytes really became rendered cells.
+        self.view.page().runJavaScript(
+            "window.ostlr ? window.ostlr.write('%s') : window.writeB64('%s')"
+            % (_b64(chunk), _b64(chunk)))
 
     def _on_failed(self, reason: str) -> None:
         if self._ready:
