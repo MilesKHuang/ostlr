@@ -1,0 +1,18 @@
+# Ostlr runtime dependencies.
+#
+# This file exists because the earlier "stdlib only" claim is no longer true: the
+# panel now hosts a real terminal, and that needs Qt + Chromium + a PTY layer.
+#
+# Install from a mirror. The default PyPI index serves only pure-Python wheels
+# here, which is why an earlier attempt concluded - wrongly - that PySide6 was
+# impossible:
+#
+#   py -3 -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+#
+# (Tsinghua's mirror timed out; aliyun and USTC answered.)
+
+PySide6>=6.6          # Qt shell + QtWebEngine (hosts xterm.js)
+pywinpty>=2.0         # ConPTY: the panel owns the terminal, not just watches it
+psutil>=5.9           # process facts (tree memory, cwd where permitted)
+pillow>=10.0          # tray icon image
+pystray>=0.19         # system tray (degrades to the title counter if missing)

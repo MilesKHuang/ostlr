@@ -49,19 +49,26 @@ class TestReadme(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, self.text)
 
-    def test_stdlib_and_py3_constraints(self):
-        self.assertIn("standard library only", self.text)
+    def test_declared_dependencies_and_py3(self):
+        # The project is no longer stdlib-only: it hosts a terminal. What must
+        # still be true is that `py -3` is the documented interpreter, the
+        # dependencies are declared, and the mirror (the thing that makes them
+        # installable here) is named.
         self.assertIn("py -3", self.text)
-        self.assertIn("never `python`", self.text)
+        self.assertIn("Microsoft Store stub", self.text)
+        self.assertIn("requirements.txt", self.text)
+        self.assertIn("mirrors.aliyun.com", self.text)
 
     def test_honest_limit_is_stated(self):
         # The one thing a user must not have to discover by experiment.
         self.assertIn("`blocked` needs a producer", self.text)
-        self.assertIn("not** `blocked`", self.text)
+        self.assertIn("never rendered as `idle`", self.text)
 
-    def test_l1_is_declared_unsupported(self):
-        self.assertIn("unsupported", self.text)
-        self.assertIn("pywinpty", self.text)
+    def test_l1_state_is_stated_truthfully(self):
+        # It used to blame pywinpty; the pane owns a ConPTY now, so the honest
+        # statement is "the sequence is not parsed yet".
+        self.assertIn("not parsed yet", self.text)
+        self.assertIn("OSC 7501", self.text)
 
 
 class TestRecipe(unittest.TestCase):

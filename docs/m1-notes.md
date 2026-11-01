@@ -220,3 +220,41 @@ All four are covered by tests now: sessions and template matching have explicit
 cases for "a path in the args is not an agent", "a stale record is not a
 session", "the toolbar buttons exist and are bound", and the detail/legend text
 is generated in `view_model` so the view still owns no literal.
+
+## 3. The pivot: stdlib-only was a wrong conclusion, not a constraint (fixed)
+
+The M1 build used tkinter because "PyPI is dead here". That was measured against
+the **default index**, which serves only pure-Python wheels. Switching to
+`https://mirrors.aliyun.com/pypi/simple/` yields the wheels the baseline always
+wanted:
+
+```
+psutil-7.2.2-cp37-abi3-win_amd64.whl
+pywinpty-3.1.2-cp313-cp313-win_amd64.whl
+pyside6-6.12.0-cp310-abi3-win_amd64.whl
+pillow-13.0.0 / pystray-0.19.5
+```
+
+So the whole stack downgrade - tkinter instead of Qt, no PTY, no terminal, a
+process list instead of a manager - was my error, recorded as an environment
+fact instead of being investigated. The lesson is in `AGENTS.md` now: a package
+that "does not exist" says something about the index, not about the machine.
+
+### What replaced what
+
+| Then | Now |
+|---|---|
+| tkinter panel, list + banner only | PySide6 shell: toolbar, session list, terminal tabs, split panes, tray |
+| no PTY; sessions only observed | ConPTY via pywinpty; the pane writes its own status record (`source=ostlr-pane`) |
+| no terminal | xterm.js in QWebEngineView, 277 KB vendored, no CDN |
+| fixed template list + absolute paths in config | discovery: PATH scan + remembered picks + Browse, and "use the running copy" when the selected exe has no API key |
+| no layout memory | `layout.json`: tabs, splits, sizes, commands, directories |
+| no tray | pystray badge with the waiting count; absence stated |
+
+### Defects found while packaging
+
+`--collect-all winpty` was missing: the wheel ships `OpenConsole.exe` and
+`winpty-agent.exe` next to the DLLs, and without them the PTY fails silently -
+the pane stays blank with no message anywhere. The exe now carries them, and a
+`OSTLR_DEBUG_JS=1` switch prints the page's own console for the next time a
+packaged pane looks dead.

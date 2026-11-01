@@ -1,58 +1,67 @@
 # AGENTS.md
 
-Ostlr is a local Windows panel that lists the AI agent sessions running on this
-machine (Claude Code / Codex / proJV / any shell), shows which one is waiting for
-a human, and lets you focus / kill / restart / start one. Self-use tool, no cloud,
-no telemetry. The design baseline is `docs/ostlr-implmentation.md` - read it
-before changing behaviour; it carries the pain-point table, the rejected stacks
-and the hard constraints.
+Ostlr is a local Windows panel for the AI agent sessions running on this
+machine: it lists them, says who is waiting for a human, and lets you start,
+watch, type into, focus, kill and restart them. Self-use tool; no cloud, no
+telemetry. The design baseline is `docs/ostlr-implmentation.md`; the agreed
+implementation plan is `docs/sop/steve-ostlr.md`.
 
 ## Environment (measured, not assumed)
 
 | Fact | Value | Consequence |
 |---|---|---|
-| OS | Windows (64-bit), real desktop, 2560x1440 | GUI windows can be created and focused |
-| Python | 3.13 via `py -3` - **`python` is the Store stub and does not work** | always use `py -3` in scripts and docs |
-| PyPI | effectively unavailable: `psutil`, `PySide6`, `pywinpty`, `pystray`, `pillow`, `pywin32` all fail to install (only a few pure-python wheels resolve, downloads reset) | **standard library only** |
-| GUI | `tkinter` (Tk 8.6) works | the panel is tkinter, not PySide6 |
-| Win32 API | reachable through `ctypes` | window enumeration / focus / process walk without pywin32 |
-| Process data | `powershell -NoProfile -Command "Get-CimInstance Win32_Process"` returns CommandLine, ParentProcessId, WorkingSetSize as JSON | parse it, do not shell out per row |
+| OS | Windows (64-bit), real desktop | Qt windows, ConPTY and a tray all work |
+| Python | 3.13 via `py -3` - **`python` is the Store stub** | always `py -3` in scripts and docs |
+| Default PyPI index | serves **pure-Python wheels only** (`psutil`, `PySide6`, `pywinpty` all "not found") | do not conclude a package is impossible from it - that mistake cost a whole design pivot |
+| Mirror | `https://mirrors.aliyun.com/pypi/simple/` works and has the win_amd64 wheels; USTC works; Tsinghua times out here | install with `-i <mirror>`; `requirements.txt` documents it |
+| WebView2 runtime | installed (156.x) | an alternative renderer path exists if Qt is ever dropped |
+| Windows Terminal | `wt.exe` present | an external-window fallback is available |
 
-Deviations from `docs/ostlr-implmentation.md` §4.1 that follow from the table
-above are **decided, not open**: tkinter replaces PySide6, ctypes replaces
-pywin32, CIM replaces psutil, and L1 (OSC 7501 over our own ConPTY, needs
-pywinpty) is **deferred with a documented stub**. L2 status files and L3 window
-titles are the M1 state sources; the session list must show `unknown` rather than
-guess (design §3.2, U5).
+## Stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Shell | PySide6 (Qt 6.12) | native window, DPI aware, no browser chrome |
+| Terminal | ConPTY via `pywinpty` + `xterm.js` in `QWebEngineView` | we own the PTY (that is what L1 needs) and xterm.js does VT + IME; we write no terminal ourselves |
+| Process facts | `psutil` + `Get-CimInstance Win32_Process` | tree memory, command lines, cwd where permitted |
+| Tray | `pystray` + `pillow` | optional; absence is stated, never faked |
 
 ## Build, run, test
 
 ```
-py -3 -m ostlr                 # run the panel
-py -3 -m ostlr --selftest      # headless self-check, prints PASS/FAIL lines, exit 1 on failure
+py -3 -m ostlr                    # the panel
+py -3 -m ostlr --once --json      # one snapshot, headless
+py -3 -m ostlr --selftest         # PASS/SKIP lines
 py -3 -m unittest discover -s tests -v
+py -3 tools\build_exe.py          # dist\ostlr\ostlr.exe (one folder)
 ```
 
-- No build step, no requirements.txt with third-party pins, no virtualenv.
-- Every new module gets a unit test under `tests/`; pure logic (parsing CIM rows,
-  state precedence, path handling, receipt text) must be testable without a GUI.
-- `--selftest` must run on a machine with no agent sessions and still exit 0.
+- Every module has a unit test. Pure logic (sessions, ladder, store, view_model,
+  discovery, layout) must be testable without a window.
+- `--selftest` must run with Qt unavailable and still exit 0.
+- The import test enforces "no UNDECLARED third-party imports": the allow-list is
+  `schema.ALLOWED_THIRD_PARTY`. Adding a dependency means adding it there, to
+  `requirements.txt`, and to the README.
 
 ## Do not
 
-- Do not add a dependency outside the Python standard library. If a feature
-  truly needs one, write it down as blocked instead of adding it.
-- Do not invent a state: no data means `unknown`, never `idle` (U5).
-- Do not simulate keystrokes into another application's window. External
-  sessions get focus + clipboard + receipt only (design §3.4, §4.8 rule 5).
-- Do not write to other tools' config files or session databases. Read-only.
-- Do not kill a process tree without showing what will die first.
-- Do not commit `%APPDATA%/ostlr` contents, logs, or anything machine-specific.
-- Do not leave orphan child processes on exit.
+- Do not invent a state. No data means `unknown`, never `idle`.
+- Do not fake an affordance. If the tray cannot be drawn or a PTY cannot be
+  adopted, say so on screen.
+- Do not adopt a PTY you do not own. An external session gets focus, a copy of
+  its path, or a shell in its directory - never a pretend "attach".
+- Do not kill a process tree without showing the pid count and the memory first.
+- Do not leave orphan children on exit; panes stop their own PTY.
+- Do not put a colour, a font size or a glyph outside `ostlr/qt/style.py` (roles)
+  and `ostlr/qt/vendor` (the renderer).
+- Do not hardcode agent paths in the launcher. Discovery is the contract; a
+  remembered pick is the only stored location, and the user chose it.
+- Do not commit `%APPDATA%\ostlr` contents, logs, `dist/` or `build_pyi/`.
 
 ## Style
 
 - Python 3.13, type hints on public functions, `from __future__ import annotations`.
-- One module = one responsibility; the tkinter view never parses process data.
-- User-facing strings in English; comments explain *why*, not *what*.
-- Commit messages: `area: what changed` and one line of why.
+- One module = one responsibility; the view never parses process data.
+- User-facing strings in English, in the user's words (no protocol names in the
+  first screen).
+- Commit messages: `area: what changed` plus one line of why.

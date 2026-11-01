@@ -91,7 +91,10 @@ class TestL1Stub(unittest.TestCase):
         result = l1.probe()
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "unsupported")
-        self.assertIn("pywinpty", result["reason"])
+        self.assertIn("OSC 7501", result["reason"])
+        # The reason must name the CURRENT blocker. It used to blame pywinpty;
+        # the pane owns a ConPTY now, so blaming the PTY would be a lie.
+        self.assertNotIn("pywinpty", result["reason"])
 
     def test_combine_is_unsupported(self):
         from ostlr.probe import l1

@@ -39,12 +39,20 @@ from typing import Any, Dict, Optional
 # without duplicating the string.
 UNSUPPORTED = "unsupported"
 
-# The reason, in one line, naming the actual blocker.
-REASON = "pywinpty unavailable: L1 needs our own PTY to see OSC 7501"
+# The reason, in one line, naming the actual blocker. It used to say "pywinpty
+# unavailable"; pywinpty is installed now and the pane owns a real ConPTY, so the
+# remaining gap is the parser, not the PTY.
+REASON = "the pane does not parse OSC 7501 yet: ConPTY is owned, the sequence is not read"
 
 
 def supported() -> bool:
-    """False: this build cannot capture OSC 7501. See the module docstring."""
+    """False: the pane owns a PTY now, but it does not read OSC 7501 from it.
+
+    That is the next step rather than a mystery: `terminal.PtyBridge.data` already
+    carries every byte the child writes, so a parser that strips `ESC ] 7501 ;`
+    records out of that stream and answers `ESC ] 7501 ; ? ST` probes is a
+    contained change to one module.
+    """
     return False
 
 

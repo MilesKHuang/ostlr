@@ -1,12 +1,16 @@
-"""The Qt shell: session list on the left, terminal tabs on the right.
+"""The Qt shell: sessions on the left, terminal panes on the right.
 
-This replaces the tkinter panel. The reasons it exists, in one place:
+What this file is responsible for, in one place:
 
-  * the left list answers "who is running and who is waiting for me" - the same
-    sessions/ladder/view_model logic the old panel used (never tk-specific);
-  * the right side is a real terminal: we own the PTY and xterm.js renders it, so
-    a session started here can be typed into without leaving the window;
-  * the launcher discovers what is installed instead of demanding a config edit.
+  * the list answers "who is running and who waits for me" (sessions/ladder/
+    view_model do the thinking; this only draws it);
+  * the panes are real terminals we own (ConPTY + xterm.js), so a session we
+    start can be typed into, split, and reported to the ladder as `ostlr-pane`;
+  * the launcher discovers programs instead of demanding a config edit, and it
+    says out loud which copy of an exe it will run and whether that copy has an
+    API key;
+  * layout and tray make it survive a restart without pretending to restore
+    processes.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from PySide6.QtWidgets import (
 from .. import actions as actions_mod
 from .. import config as config_mod
 from .. import view_model
-from . import discovery, style, terminal
+from . import discovery, layout as layout_mod, style, terminal, tray as tray_mod
 
 LIST_LIMIT = 200
 
@@ -35,17 +39,18 @@ class LauncherDialog(QWidget):
     def __init__(self, cfg, parent=None) -> None:
         super().__init__(parent, Qt.Dialog)
         self.setWindowTitle("Start a session")
-        self.resize(720, 340)
+        self.resize(760, 380)
         self.cfg = cfg
         self.chosen: Optional[Dict[str, object]] = None
         self.directory = os.getcwd()
+        self._live_path = ""
 
         layout = QVBoxLayout(self)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Program"))
         self.combo = QComboBox(self)
-        self.combo.setMinimumWidth(400)
+        self.combo.setMinimumWidth(420)
         self.combo.currentIndexChanged.connect(lambda _i: self._update_home())
         row.addWidget(self.combo, 1)
         browse = QPushButton("Browse...", self)
@@ -70,7 +75,6 @@ class LauncherDialog(QWidget):
         self.use_live.setVisible(False)
         self.use_live.clicked.connect(self._adopt_live_copy)
         layout.addWidget(self.use_live)
-        self._live_path = ""
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -98,16 +102,19 @@ class LauncherDialog(QWidget):
         entry = self.combo.currentData()
         if not entry:
             self.home_label.setText("")
+            self.use_live.setVisible(False)
             return
         info = discovery.home_of(str(entry.get("command")))
         lines = ["exe:  %s" % info["exe"], "home: %s" % info["dir"]]
         if info["files_dir"]:
             lines.append("projv_files: %s   (api key: %s)"
                          % (info["files_dir"], "yes" if info["has_key"] else "NO"))
+        if not info["has_key"]:
+            lines.append("")
+            lines.append("This copy has no API key. If you already run one that has, "
+                         "pick it below instead of letting a fresh copy ask again.")
         self.home_label.setText("\n".join(lines))
 
-        # If this copy has no key but the user already runs one that does, offer
-        # that copy instead of letting a fresh install ask for the key again.
         self._live_path = "" if info["has_key"] else discovery.best_keyed_copy(
             str(entry.get("command")))
         if self._live_path:
@@ -144,6 +151,9 @@ class LauncherDialog(QWidget):
         except Exception:
             pass
         self.reload_entries()
+        self._adopt_if_present(path)
+
+    def _adopt_if_present(self, path: str) -> None:
         for index in range(self.combo.count()):
             entry = self.combo.itemData(index)
             if entry and os.path.normcase(str(entry.get("command"))) == os.path.normcase(path):
@@ -171,7 +181,7 @@ class LauncherDialog(QWidget):
 
 
 class MainWindow(QMainWindow):
-    """Sessions on the left, terminal tabs on the right."""
+    """The panel: session list, terminal panes, tray, layout."""
 
     def __init__(self, cfg=None, provider=None) -> None:
         super().__init__()
@@ -179,32 +189,56 @@ class MainWindow(QMainWindow):
         self._provider = provider or (lambda: {"v": 1, "header": {}, "rows": []})
         self.snapshot: Dict[str, object] = {"v": 1, "header": {}, "rows": []}
         self.panes: List[terminal.TerminalPane] = []
+        self.pane_by_pid: Dict[int, terminal.TerminalPane] = {}
         self.selected_pid: Optional[int] = None
         self.receipt = ""
+
+        self.tray = tray_mod.Tray(self)
+        self.tray.show_requested.connect(self._show_from_tray)
+        self.tray.refresh_requested.connect(self.refresh_now)
+        self.tray.quit_requested.connect(self.close)
 
         self.setWindowTitle("Ostlr")
         self.resize(1340, 820)
         self.setStyleSheet(style.stylesheet())
+        self.setCentralWidget(self._build())
 
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.refresh_now)
+        self._timer.start(max(1, int(self.cfg.tick_s)) * 1000)
+        QTimer.singleShot(200, self.refresh_now)
+
+        if self.tray.start():
+            self._set_receipt("tray active")
+        else:
+            self._set_receipt("no tray (%s) - the title carries the count" % self.tray.reason)
+
+        if not self._restore_layout():
+            self.new_terminal()
+
+    # --- construction ---------------------------------------------------
+    def _build(self) -> QWidget:
         central = QWidget(self)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(8, 8, 8, 6)
         outer.setSpacing(6)
 
         bar = QHBoxLayout()
-        self.action_new = QPushButton("+  New terminal", self)
-        self.action_new.clicked.connect(self.new_terminal)
-        self.action_start = QPushButton("Start a session", self)
-        self.action_start.clicked.connect(self.start_session)
-        self.action_refresh = QPushButton("Refresh", self)
-        self.action_refresh.clicked.connect(self.refresh_now)
-        self.action_copy = QPushButton("Copy path", self)
-        self.action_copy.clicked.connect(self.copy_selected_path)
-        self.action_focus = QPushButton("Focus window", self)
-        self.action_focus.clicked.connect(self.focus_selected)
-        for button in (self.action_new, self.action_start, self.action_refresh,
-                       self.action_copy, self.action_focus):
+        self.actions: Dict[str, QPushButton] = {}
+        for key, label, slot in (
+            ("new", "+  New terminal", self.new_terminal),
+            ("start", "Start a session", self.start_session),
+            ("open", "Open in panel", self.open_selected_session),
+            ("refresh", "Refresh", self.refresh_now),
+            ("copy", "Copy path", self.copy_selected_path),
+            ("focus", "Focus window", self.focus_selected),
+            ("split_h", "Split right", lambda: self.split_current(False)),
+            ("split_v", "Split down", lambda: self.split_current(True)),
+        ):
+            button = QPushButton(label, self)
+            button.clicked.connect(slot)
             bar.addWidget(button)
+            self.actions[key] = button
         bar.addStretch(1)
         self.header_label = QLabel("", self)
         bar.addWidget(self.header_label)
@@ -220,11 +254,11 @@ class MainWindow(QMainWindow):
         left = QWidget(split)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("Sessions", left))
+        left_layout.addWidget(QLabel("Sessions  (double-click opens one in a pane)", left))
         self.list = QListWidget(left)
         self.list.setMinimumWidth(360)
         self.list.itemSelectionChanged.connect(self._on_select)
-        self.list.itemDoubleClicked.connect(lambda _item: self.focus_selected())
+        self.list.itemDoubleClicked.connect(lambda _i: self.open_selected_session())
         left_layout.addWidget(self.list, 1)
         self.detail = QLabel("", left)
         self.detail.setWordWrap(True)
@@ -237,52 +271,187 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget(right)
         self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_pane)
+        self.tabs.tabCloseRequested.connect(self.close_tab)
         right_layout.addWidget(self.tabs)
         split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setSizes([400, 940])
+        self.split = split
 
         self.status_label = QLabel("Ready", self)
         outer.addWidget(self.status_label)
-        self.setCentralWidget(central)
+        return central
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh_now)
-        self._timer.start(max(1, int(self.cfg.tick_s)) * 1000)
-        QTimer.singleShot(200, self.refresh_now)
-
-        self.new_terminal()
-
-    # --- terminals -----------------------------------------------------
-    def new_terminal(self, argv=None, cwd=None, title=None):
+    # --- panes ----------------------------------------------------------
+    def _make_pane(self, argv=None, cwd=None, title=None):
         if len(self.panes) >= terminal.MAX_PANES:
             self._set_receipt("pane limit reached (%d)" % terminal.MAX_PANES)
             return None
         pane = terminal.TerminalPane(argv or terminal.shell_for(cwd), cwd=cwd,
                                      title=title or "shell", parent=self)
         pane.exited.connect(lambda reason, p=pane: self._on_pane_exit(p, reason))
+        pane.bridge.started.connect(lambda pid, p=pane: self._bind_pane(p, pid))
         self.panes.append(pane)
+        return pane
+
+    def _bind_pane(self, pane, pid: int) -> None:
+        if pid:
+            self.pane_by_pid[int(pid)] = pane
+            self._set_receipt("%s is pane-hosted (pid %d)" % (pane.title, pid))
+
+    def new_terminal(self, argv=None, cwd=None, title=None):
+        pane = self._make_pane(argv, cwd, title)
+        if pane is None:
+            return None
         index = self.tabs.addTab(pane, pane.title)
         self.tabs.setCurrentIndex(index)
         pane.focus_terminal()
         return pane
 
-    def close_pane(self, index: int) -> None:
-        pane = self.tabs.widget(index)
-        if pane is None:
+    def split_current(self, vertical: bool = False):
+        """Turn the current tab into two panes: the one there, plus a new shell."""
+        current = self.tabs.currentWidget()
+        if current is None:
+            return None
+        if isinstance(current, QSplitter):
+            self._set_receipt("this tab already has two panes")
+            return None
+        if len(self.panes) >= terminal.MAX_PANES:
+            self._set_receipt("pane limit reached (%d)" % terminal.MAX_PANES)
+            return None
+        index = self.tabs.currentIndex()
+        title = self.tabs.tabText(index)
+        cwd = getattr(current, "cwd", None)
+        fresh = self._make_pane(cwd=cwd, title="shell")
+        if fresh is None:
+            return None
+        self.tabs.removeTab(index)
+        splitter = QSplitter(Qt.Vertical if vertical else Qt.Horizontal, self)
+        splitter.addWidget(current)
+        splitter.addWidget(fresh)
+        splitter.setSizes([500, 500])
+        self.tabs.insertTab(index, splitter, title)
+        self.tabs.setCurrentIndex(index)
+        fresh.focus_terminal()
+        return fresh
+
+    def close_tab(self, index: int) -> None:
+        widget = self.tabs.widget(index)
+        if widget is None:
             return
         self.tabs.removeTab(index)
-        if pane in self.panes:
-            self.panes.remove(pane)
-        pane.bridge.stop()
-        pane.deleteLater()
+        victims = [widget] if not isinstance(widget, QSplitter) else [
+            widget.widget(i) for i in range(widget.count())]
+        for pane in victims:
+            if not isinstance(pane, terminal.TerminalPane):
+                continue
+            if pane in self.panes:
+                self.panes.remove(pane)
+            for pid, bound in list(self.pane_by_pid.items()):
+                if bound is pane:
+                    del self.pane_by_pid[pid]
+            pane.bridge.stop()
+            pane.deleteLater()
 
     def _on_pane_exit(self, pane, reason: str) -> None:
         self._set_receipt("%s: %s" % (pane.title, reason))
+        self.refresh_now()
 
-    # --- snapshot ------------------------------------------------------
+    # --- session <-> pane ------------------------------------------------
+    def open_selected_session(self):
+        """Focus the pane that owns this session, or open a shell where it lives.
+
+        We cannot adopt a PTY we do not own, so the honest action for an external
+        session is a shell in its directory - never a fake "attach".
+        """
+        row = self._selected_row()
+        if not row:
+            self._set_receipt("no row selected")
+            return None
+        pid = int(row.get("pid") or 0)
+        bound = self.pane_by_pid.get(pid)
+        if bound is not None:
+            self.tabs.setCurrentWidget(bound)
+            bound.focus_terminal()
+            self._set_receipt("%s is this panel's pane" % str(row.get("agent")))
+            return bound
+        cwd = str(row.get("cwd") or "")
+        if not cwd or cwd == "?":
+            self._set_receipt("no directory on this row; use Start a session")
+            return None
+        return self.new_terminal(cwd=cwd,
+                                 title="shell @ %s" % (row.get("project") or "?"))
+
+    # --- layout ----------------------------------------------------------
+    def _layout_payload(self) -> List[Dict[str, object]]:
+        tabs: List[Dict[str, object]] = []
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index)
+            if isinstance(widget, QSplitter):
+                panes = [widget.widget(i) for i in range(widget.count())]
+                split = "v" if widget.orientation() == Qt.Vertical else "h"
+                sizes = list(widget.sizes())
+            else:
+                panes = [widget]
+                split = "h"
+                sizes = []
+            entries = [{"argv": p.argv, "cwd": p.cwd or ""} for p in panes
+                       if isinstance(p, terminal.TerminalPane)]
+            if entries:
+                tabs.append(layout_mod.tab_entry(self.tabs.tabText(index), entries,
+                                                 split, sizes))
+        return tabs
+
+    def _save_layout(self) -> None:
+        try:
+            layout_mod.save(self._layout_payload(), self.tabs.currentIndex())
+        except Exception:
+            pass
+
+    def _restore_layout(self) -> bool:
+        if not getattr(self.cfg, "restore_layout", True):
+            return False
+        data = layout_mod.load()
+        tabs = data.get("tabs") or []
+        if not tabs:
+            return False
+        restored = 0
+        for entry in tabs:
+            panes = entry.get("panes") or []
+            first = panes[0] if panes else {}
+            pane = self._make_pane(first.get("argv") or None,
+                                   first.get("cwd") or None,
+                                   title=str(entry.get("title") or "shell"))
+            if pane is None:
+                break
+            index = self.tabs.addTab(pane, pane.title)
+            restored += 1
+            if len(panes) > 1:
+                second = panes[1]
+                fresh = self._make_pane(second.get("argv") or None,
+                                        second.get("cwd") or None, title="shell")
+                if fresh is not None:
+                    self.tabs.removeTab(index)
+                    splitter = QSplitter(
+                        Qt.Vertical if entry.get("split") == "v" else Qt.Horizontal, self)
+                    splitter.addWidget(pane)
+                    splitter.addWidget(fresh)
+                    sizes = entry.get("sizes") or [500, 500]
+                    if len(sizes) == 2:
+                        splitter.setSizes([int(sizes[0]), int(sizes[1])])
+                    self.tabs.insertTab(index, splitter, pane.title)
+        if restored:
+            self._set_receipt("layout restored (%d tab(s))" % restored)
+        return restored > 0
+
+    # --- tray ------------------------------------------------------------
+    def _show_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    # --- snapshot --------------------------------------------------------
     def refresh_now(self):
         try:
             self.snapshot = self._provider() or {"v": 1, "header": {}, "rows": []}
@@ -301,9 +470,11 @@ class MainWindow(QMainWindow):
         self.list.blockSignals(True)
         self.list.clear()
         for row in rows:
-            item = QListWidgetItem("%s  %s  %s" % (
+            owned = int(row.get("pid") or 0) in self.pane_by_pid
+            item = QListWidgetItem("%s %s %-10s %s" % (
+                "*" if owned else " ",
                 view_model.state_word(row).ljust(8),
-                str(row.get("agent") or "?").ljust(10),
+                str(row.get("agent") or "?"),
                 str(row.get("project") or "?")))
             item.setData(Qt.UserRole, row)
             role = view_model.role_for(row)
@@ -322,6 +493,7 @@ class MainWindow(QMainWindow):
                     break
         self._render_banner(rows)
         self._render_detail()
+        self.tray.update(int(header.get("waiting") or 0), int(header.get("running") or 0))
 
     def _header_text(self, header: Dict[str, object]) -> str:
         parts = []
@@ -339,7 +511,8 @@ class MainWindow(QMainWindow):
         if stale:
             self.banner_label.setText(stale)
             return
-        producers = sum(1 for row in rows if str(row.get("source")) == "l2")
+        producers = sum(1 for row in rows
+                        if str(row.get("source")) in ("l2", "ostlr-pane"))
         self.banner_label.setText(view_model.unknown_banner(len(rows), len(rows), producers))
 
     def _render_detail(self) -> None:
@@ -347,7 +520,7 @@ class MainWindow(QMainWindow):
         self.detail.setText("\n".join(view_model.detail_lines(row)))
         self.status_label.setText(self.receipt or view_model.READY)
 
-    # --- gestures ------------------------------------------------------
+    # --- gestures --------------------------------------------------------
     def _selected_row(self):
         item = self.list.currentItem()
         return item.data(Qt.UserRole) if item is not None else None
@@ -378,7 +551,7 @@ class MainWindow(QMainWindow):
         self.receipt = text
         self.status_label.setText(text)
 
-    # --- launching -----------------------------------------------------
+    # --- launching -------------------------------------------------------
     def start_session(self):
         dialog = LauncherDialog(self.cfg, self)
         dialog.setWindowModality(Qt.ApplicationModal)
@@ -402,6 +575,8 @@ class MainWindow(QMainWindow):
         return self.new_terminal(argv, cwd=cwd, title=title)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_layout()
+        self.tray.stop()
         for pane in list(self.panes):
             pane.bridge.stop()
         super().closeEvent(event)

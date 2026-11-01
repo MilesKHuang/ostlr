@@ -17,9 +17,11 @@ fetching it is one more moving part; a log line per keystroke costs nothing.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import sys
+import time
 from typing import Optional
 
 from PySide6.QtCore import QThread, QUrl, Signal
@@ -29,6 +31,24 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TERM_HTML = os.path.join(HERE, "term.html")
+
+
+def _bundled(name: str) -> str:
+    """A data file next to this module, also inside a PyInstaller bundle.
+
+    A frozen build sets `__file__` to a path inside the unpacked archive; the
+    layout is preserved, so the join normally works. The _MEIPASS branch covers a
+    build that puts the data at the archive root instead.
+    """
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    if os.path.exists(here):
+        return here
+    base = getattr(sys, "_MEIPASS", "")
+    if base:
+        for candidate in (os.path.join(base, "ostlr", "qt", name), os.path.join(base, name)):
+            if os.path.exists(candidate):
+                return candidate
+    return here
 
 # One QWebEngineView is a Chromium renderer (~100 MB). The design caps panes at
 # four; beyond that the panel would cost more than the agents it watches.
@@ -44,6 +64,8 @@ class PtyBridge(QThread):
 
     data = Signal(bytes)
     failed = Signal(str)
+    started = Signal(int)
+    heartbeat = Signal()
     resized = Signal(int, int)
 
     def __init__(self, argv, cwd: Optional[str] = None, cols: int = 100,
@@ -55,7 +77,6 @@ class PtyBridge(QThread):
         self._rows = rows
         self._process = None
         self._stop = False
-
     # --- lifecycle ---------------------------------------------------
     def run(self) -> None:  # noqa: D401 - QThread entry point
         try:
@@ -81,6 +102,12 @@ class PtyBridge(QThread):
                 except OSError:
                     pass
 
+        # The pane owns this pid from now on: it is the session the list shows,
+        # and the status record the ladder reads. This is the whole reason for
+        # owning a PTY instead of watching someone else's console.
+        self.started.emit(int(getattr(self._process, "pid", 0) or 0))
+
+        last_report = 0.0
         while not self._stop:
             try:
                 chunk = self._process.read(8192)
@@ -91,6 +118,10 @@ class PtyBridge(QThread):
                 break
             if chunk:
                 self.data.emit(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
+                now = time.time()
+                if now - last_report > 5.0:
+                    last_report = now
+                    self.heartbeat.emit()
         self.failed.emit("process exited")
 
     # --- input -------------------------------------------------------
@@ -131,6 +162,11 @@ class _Page(QWebEnginePage):
         self._owner = owner
 
     def javaScriptConsoleMessage(self, level, message, line, source):  # noqa: N802
+        # OSTLR_DEBUG_JS=1 surfaces the page's own console: in a packaged build
+        # there is no devtools, and a silent blank pane is the worst symptom to
+        # chase. Every other message is ignored unless that flag is set.
+        if os.environ.get("OSTLR_DEBUG_JS") == "1" and not message.startswith("OSTLR:"):
+            print("[js] %s (%s:%s)" % (message, source, line), flush=True)
         self._owner.on_console(message)
 
 
@@ -148,6 +184,9 @@ class TerminalPane(QWidget):
         self.title = title or " ".join(self.argv)[:40]
         self._ready = False
         self._pending: list = []
+        # Filled in once the PTY reports its pid: this is the session identity.
+        self.session_pid = 0
+        self.exited_code = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -155,12 +194,35 @@ class TerminalPane(QWidget):
         self.view.setPage(_Page(self, self.view))
         layout.addWidget(self.view)
         self.view.loadFinished.connect(self._on_load)
-        self.view.load(QUrl.fromLocalFile(TERM_HTML))
+        self.view.load(QUrl.fromLocalFile(_bundled("term.html")))
 
         self.bridge = PtyBridge(self.argv, cwd=self.cwd)
         self.bridge.data.connect(self._on_data)
         self.bridge.failed.connect(self._on_failed)
+        self.bridge.started.connect(self._on_started)
+        self.bridge.heartbeat.connect(self.heartbeat)
         self.bridge.start()
+
+    # --- status: we own this PTY, so we can report it ------------------
+    def _on_started(self, pid: int) -> None:
+        self.session_pid = int(pid or 0)
+        self._report("working", "running in the panel")
+
+    def heartbeat(self) -> None:
+        """Keep the record fresh while the child is alive and quiet."""
+        if self.session_pid:
+            self._report("working", "running in the panel")
+
+    def _report(self, state: str, msg: str, exit_code=None) -> None:
+        if not self.session_pid:
+            return
+        try:
+            from .. import status as status_mod
+            status_mod.write_status(self.session_pid, state, msg=msg,
+                                    cwd=self.cwd or os.getcwd(), exit_code=exit_code,
+                                    source="ostlr-pane")
+        except Exception:
+            pass
 
     # --- pty -> view -------------------------------------------------
     def _on_load(self, ok: bool) -> None:
@@ -185,7 +247,16 @@ class TerminalPane(QWidget):
         if self._ready:
             self.view.page().runJavaScript(
                 "window.setStatus && window.setStatus('%s')" % reason.replace("'", " "))
+        # The pane owned this session; report the ending so the list says `done`
+        # instead of leaving a row that looks alive after its terminal is gone.
+        if self.session_pid:
+            self._report("done", reason, exit_code=self._exit_code())
         self.exited.emit(reason)
+
+    def _exit_code(self):
+        process = getattr(self.bridge, "_process", None)
+        code = getattr(process, "exitstatus", None)
+        return code if isinstance(code, int) else None
 
     # --- view -> pty -------------------------------------------------
     def on_console(self, message: str) -> None:
