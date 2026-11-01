@@ -50,10 +50,10 @@
   const term = new Terminal({
     fontFamily: fontFamily,
     fontSize: FONT_SIZE,
-    // Every glyph, box-drawing included, comes from the FONT. No special casing:
-    // if the face draws `|`, `-` and the corners, they look like the rest of the
-    // text by construction - matching is the font's job, not a second renderer's.
-    customGlyphs: false,
+    // Only the frame is drawn by xterm; all text (Latin and CJK) still comes from
+    // the bundled faces. Reason: no CJK face draws its box characters inside one
+    // cell, so a font-drawn frame drifts or leaves a seam at every row boundary.
+    customGlyphs: true,
     // Integer cell height: at a fractional height the drawn box glyphs leave a
     // hairline gap between rows, which reads as "the vertical bar is broken".
     lineHeight: 1.0,
