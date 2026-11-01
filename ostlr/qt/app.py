@@ -186,6 +186,14 @@ class MainWindow(QMainWindow):
         window and the terminal on a grid the user could not see.
         """
         width = int(width or self.width() or 1200)
+        # Idempotent: a second call with the same width must not touch the splitter.
+        # Otherwise the window's first resize arrives right after a pane spawned,
+        # moves the splitter, changes the grid, and the child's already-emitted
+        # history is reflowed to the new width - the "layout explodes on session
+        # load" symptom. The child must be born into a grid that is already final.
+        if getattr(self, "_split_width", None) == width and getattr(self, "body", None):
+            return
+        self._split_width = width
         left = max(300, int(width * 0.20))
         dock = max(260, int(width * 0.15))
         terminal = max(320, width - left - dock)
