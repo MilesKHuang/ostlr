@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
@@ -36,7 +36,7 @@ from .. import config as config_mod
 from .. import view_model
 from . import (
     discovery, gauges as gauge_mod, launcher as launcher_mod, layout as layout_mod,
-    procstat, style, terminal, tray as tray_mod, tree as tree_mod,
+    procstat, rowdelegate, style, terminal, tray as tray_mod, tree as tree_mod,
 )
 
 GLYPH = {"blocked": "\u25cf", "working": "\u25d0", "idle": "\u25cb",
@@ -138,6 +138,8 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(QLabel("Sessions (owned by this panel)", left))
         self.list = QListWidget(left)
         self.list.setMinimumWidth(380)
+        self.list.setItemDelegate(rowdelegate.RowDelegate(self.list))
+        self.list.setSpacing(2)
         self.list.itemSelectionChanged.connect(self._on_select)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._session_menu)
@@ -217,7 +219,7 @@ class MainWindow(QMainWindow):
         pane = terminal.TerminalPane(argv or terminal.shell_for(cwd), cwd=cwd,
                                      title=title or "shell", parent=self)
         pane.exited.connect(lambda reason, p=pane: self._on_pane_exit(p, reason))
-        pane.bridge.started.connect(lambda pid, p=pane: self._bind_pane(p, pid))
+        pane.started.connect(lambda pid, p=pane: self._bind_pane(p, pid))
         pane.l1_report.connect(self._on_l1)
         self.panes.append(pane)
         return pane
@@ -291,7 +293,7 @@ class MainWindow(QMainWindow):
             for pid, bound in list(self.pane_by_pid.items()):
                 if bound is pane:
                     del self.pane_by_pid[pid]
-            pane.bridge.stop()
+            pane.stop()
             pane.deleteLater()
         if not self.panes and getattr(self, "placeholder", None) is None:
             self.placeholder = QLabel("No terminal yet.", self)
@@ -366,16 +368,12 @@ class MainWindow(QMainWindow):
         self.tray.update(blocked, working)
 
     def _row_item(self, row: Dict[str, object]) -> QListWidgetItem:
-        glyph = GLYPH.get(str(row["state"]), "\u25cc")
-        line1 = "%s %s   %s   %s" % (glyph, row["agent"], row["project"],
-                                     view_model.state_word(row))
-        line2 = "     cpu %-4s  mem %-5s  gpu %-6s  %s" % (
-            procstat.format_cpu(row.get("cpu")), procstat.format_mem(row.get("mem")),
-            procstat.format_gpu(row.get("gpu")), view_model.format_mem(row.get("rss")))
-        item = QListWidgetItem("%s\n%s" % (line1, line2))
+        # The delegate paints everything; the text stays for tooltips and for
+        # anyone reading the widget tree in a test.
+        item = QListWidgetItem("%s  %s  %s" % (row.get("agent"), row.get("project"),
+                                               row.get("state")))
         item.setData(Qt.UserRole, row)
-        role = view_model.role_for(row)
-        item.setForeground(style.colour(role if role in style.ROLES else "fg"))
+        item.setSizeHint(QSize(0, rowdelegate.RowDelegate.ROW_HEIGHT))
         return item
 
     def _render_banner(self, rows) -> None:
@@ -452,7 +450,7 @@ class MainWindow(QMainWindow):
             self._set_receipt("no pane to send to - the path is in the clipboard")
             return
         text = ("@" + path) if at_prefix else path
-        pane.bridge.write(text)
+        pane.write(text)
         same = bool(getattr(pane, "cwd", None)) and os.path.normcase(
             os.path.dirname(path)) == os.path.normcase(pane.cwd)
         self._set_receipt("sent %s -> Pane\u300c%s\u300d  (%s)" % (
@@ -545,7 +543,7 @@ class MainWindow(QMainWindow):
             return
         pane = self.pane_by_pid.get(pid)
         if pane is not None:
-            pane.bridge.stop()
+            pane.stop()
         result = actions_mod.kill({"pid": pid, "started_at": 0, "cwd": row.get("cwd")})
         self._set_receipt(str(result.get("receipt") or result.get("reason")))
         self.refresh_now()
@@ -594,5 +592,5 @@ class MainWindow(QMainWindow):
             pass
         self.tray.stop()
         for pane in list(self.panes):
-            pane.bridge.stop()
+            pane.stop()
         super().closeEvent(event)

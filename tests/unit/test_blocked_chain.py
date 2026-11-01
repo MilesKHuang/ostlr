@@ -68,9 +68,12 @@ class TestBlockedChain(BlockedCase):
     def test_the_waiting_gauge_counts_it(self):
         self.assertIn("waiting 1", self.window.gauges.waiting.caption)
 
-    def test_the_row_shows_the_glyph_and_the_state_word(self):
+    def test_the_row_carries_the_state_for_the_delegate(self):
+        # The glyph is painted by RowDelegate from the row dict; the item text
+        # stays readable for tests and tooltips.
+        from ostlr.qt import rowdelegate
+        self.assertEqual("\u25cf", rowdelegate.GLYPH["blocked"])
         text = self.window.list.item(0).text()
-        self.assertIn("\u25cf", text)      # the 3.2 glyph for blocked
         self.assertIn("blocked", text)
         self.assertIn("projV", text)
 

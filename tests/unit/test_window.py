@@ -57,7 +57,7 @@ class TestStartFrom(WindowCase):
             pane = self.window.start_from(entry, tmp, "panel")
             self.assertIsNotNone(pane)
             self.assertEqual(os.path.normcase(tmp), os.path.normcase(pane.cwd))
-            pane.bridge.stop()
+            pane.stop()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -105,7 +105,7 @@ class TestWelcome(WindowCase):
         titles = [self.window.tabs.tabText(i) for i in range(self.window.tabs.count())]
         self.assertNotIn("welcome", titles)
         for pane in list(self.window.panes):
-            pane.bridge.stop()
+            pane.stop()
 
     def test_the_welcome_text_says_where_a_session_comes_from(self):
         if self.window.placeholder is None:
@@ -131,7 +131,7 @@ class TestReceipts(WindowCase):
             self.assertIn("copied", self.window.receipt)
             self.assertIn("Pane", self.window.receipt)
             self.assertIn("same project", self.window.receipt)
-            pane.bridge.stop()
+            pane.stop()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

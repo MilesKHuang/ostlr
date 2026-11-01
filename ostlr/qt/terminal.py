@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Optional
 
-from PySide6.QtCore import QThread, QUrl, Signal
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -177,6 +177,19 @@ class TerminalPane(QWidget):
     exited = Signal(str)
     # (pid, report): an OSC 7501 report from the CLI running in this pane.
     l1_report = Signal(int, dict)
+    # The PTY started late (once the page knew its grid), so callers listen here
+    # instead of reaching into the bridge that may not exist yet.
+    started = Signal(int)
+
+    def stop(self) -> None:
+        if self.bridge is not None:
+            self.bridge.stop()
+        if self._flush_timer is not None:
+            self._flush_timer.stop()
+
+    def write(self, text: str) -> None:
+        if self.bridge is not None:
+            self.bridge.write(text)
 
     def __init__(self, argv, cwd: Optional[str] = None, title: str = "",
                  parent=None) -> None:
@@ -195,6 +208,14 @@ class TerminalPane(QWidget):
             self._l1 = l1_mod.Stream()
         except Exception:
             self._l1 = None
+        # The PTY is NOT started here: it waits for the page's first grid report,
+        # so the child is born with the right size. Spawning at 100x30 and
+        # resizing later left the TUI with a half-repainted frame - the stray
+        # box-drawing characters the user saw.
+        self.bridge = None
+        self._buffer = bytearray()
+        self._started = False
+        self._flush_timer = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -204,16 +225,48 @@ class TerminalPane(QWidget):
         self.view.loadFinished.connect(self._on_load)
         self.view.load(QUrl.fromLocalFile(_bundled("term.html")))
 
-        self.bridge = PtyBridge(self.argv, cwd=self.cwd)
+        # Fallback: if the page never reports a grid, start anyway after a second
+        # so a broken web view cannot leave the pane permanently empty.
+        QTimer.singleShot(1000, lambda: self._start_pty(100, 30))
+
+    # --- pty lifecycle: born at the right size ---------------------------
+    def _start_pty(self, cols: int, rows: int) -> None:
+        """Spawn the child once the page knows its grid.
+
+        This is the fix for the half-repainted frame: the child used to start at
+        100x30 and get resized afterwards, and a TUI that redraws only changed
+        cells leaves the old borders on screen.
+        """
+        if self._started or not self._ready:
+            return
+        self._started = True
+        self.bridge = PtyBridge(self.argv, cwd=self.cwd, cols=int(cols), rows=int(rows))
         self.bridge.data.connect(self._on_data)
         self.bridge.failed.connect(self._on_failed)
         self.bridge.started.connect(self._on_started)
         self.bridge.heartbeat.connect(self.heartbeat)
         self.bridge.start()
+        self._flush_timer = QTimer(self)
+        self._flush_timer.timeout.connect(self._flush)
+        self._flush_timer.start(16)   # 60 Hz: batching, not one IPC per chunk
+
+    def _flush(self) -> None:
+        """Push whatever accumulated in the last 16 ms as one JS call.
+
+        One `runJavaScript` per PTY read made a busy TUI crawl: the round trip
+        dominated the throughput. Coalescing to a frame is what a terminal is
+        supposed to do.
+        """
+        if not self._buffer:
+            return
+        chunk = bytes(self._buffer)
+        self._buffer.clear()
+        self._push(chunk)
 
     # --- status: we own this PTY, so we can report it ------------------
     def _on_started(self, pid: int) -> None:
         self.session_pid = int(pid or 0)
+        self.started.emit(self.session_pid)
         self._report("working", "running in the panel")
 
     def heartbeat(self) -> None:
@@ -249,8 +302,8 @@ class TerminalPane(QWidget):
         try:
             from ..probe import l1 as l1_mod
             reports, probe = self._l1.feed(chunk)
-            if probe:
-                self.bridge.write(l1_mod.PROBE)   # answer immediately, or the CLI stays silent
+            if probe and self.bridge is not None:
+                self.bridge.write(l1_mod.PROBE)   # answer or the CLI stays silent
             for report in reports:
                 self.l1_report.emit(self.session_pid, report)
         except Exception:
@@ -258,7 +311,8 @@ class TerminalPane(QWidget):
         if not self._ready:
             self._pending.append(chunk)
             return
-        self._push(chunk)
+        # Coalesce: the 16 ms flush timer pushes one JS call per frame.
+        self._buffer.extend(chunk)
 
     def _push(self, chunk: bytes) -> None:
         self.view.page().runJavaScript("window.writeB64 && window.writeB64('%s')" % _b64(chunk))
@@ -287,10 +341,17 @@ class TerminalPane(QWidget):
         except Exception:
             return
         if "k" in payload:
-            self.bridge.write(payload["k"])
+            if self.bridge is not None:
+                self.bridge.write(payload["k"])
         elif "r" in payload:
             cols, rows = payload["r"]
-            self.bridge.resize(int(cols), int(rows))
+            cols, rows = int(cols), int(rows)
+            if not self._started:
+                # First grid report: the child is born with the size the user sees.
+                self._start_pty(cols, rows)
+                return
+            if self.bridge is not None:
+                self.bridge.resize(cols, rows)
 
     def _refit(self) -> None:
         """Ask the page to recompute its grid after the layout settled."""
@@ -305,8 +366,11 @@ class TerminalPane(QWidget):
         self.view.setFocus()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self.bridge.stop()
-        self.bridge.wait(1500)
+        if self.bridge is not None:
+            self.bridge.stop()
+            self.bridge.wait(1500)
+        if self._flush_timer is not None:
+            self._flush_timer.stop()
         super().closeEvent(event)
 
 

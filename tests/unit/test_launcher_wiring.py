@@ -49,7 +49,7 @@ class StartSessionCase(unittest.TestCase):
         launcher_mod.Launcher = self._real
         try:
             for pane in list(self.window.panes):
-                pane.bridge.stop()
+                pane.stop()
             self.window.close()
         except Exception:
             pass
