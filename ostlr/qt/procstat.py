@@ -60,7 +60,23 @@ def cpu_count() -> int:
 
 
 def tree_stats(pid: int) -> Dict[str, Optional[float]]:
-    """CPU%, memory% and RSS for one process tree, summed over its children."""
+    """CPU%, memory% and RSS for one process tree, in Task-Manager units.
+
+    The units matter, because the user compares these numbers with Task Manager:
+
+      cpu   percent of the WHOLE machine (psutil reports per-core, so the tree sum
+            is divided by the logical core count). Task Manager's process column
+            uses the same denominator.
+      mem   percent of physical RAM, which Task Manager shows as a percentage of
+            its "In use" tile - they differ by the kernel's own share, so a small
+            gap is expected and is not a bug.
+      gpu   percent summed over the process's engine instances (3D + Copy + Video),
+            which is why it can read higher than the 3D-only figure in Task
+            Manager's GPU column.
+
+    The first call for a pid has no previous sample and reports 0.0; the worker
+    primes the list at startup so the panel never shows that artefact.
+    """
     psutil = _psutil()
     out: Dict[str, Optional[float]] = {"cpu": None, "mem": None, "rss": None}
     if psutil is None or not pid:
@@ -84,6 +100,24 @@ def tree_stats(pid: int) -> Dict[str, Optional[float]]:
     out["mem"] = (100.0 * rss / ram) if ram else None
     out["rss"] = rss
     return out
+
+
+def prime(pids: List[int]) -> None:
+    """Take one throwaway cpu_percent sample so the first real reading is real."""
+    psutil = _psutil()
+    if psutil is None:
+        return
+    for pid in pids:
+        try:
+            process = psutil.Process(pid)
+            process.cpu_percent(interval=None)
+            for child in process.children(recursive=True):
+                try:
+                    child.cpu_percent(interval=None)
+                except Exception:
+                    continue
+        except Exception:
+            continue
 
 
 # --- GPU -------------------------------------------------------------------

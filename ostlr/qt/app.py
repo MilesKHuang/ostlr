@@ -347,8 +347,14 @@ class MainWindow(QMainWindow):
 
     def refresh_now(self):
         pids = [int(getattr(p, "session_pid", 0) or 0) for p in self.panes]
+        pids = [pid for pid in pids if pid]
+        if pids and not getattr(self, "_primed", False):
+            # cpu_percent has no previous sample on its first call and reports 0:
+            # prime once so the first frame is not a lie.
+            procstat.prime(pids)
+            self._primed = True
         try:
-            self.stats = procstat.sample([pid for pid in pids if pid])
+            self.stats = procstat.sample(pids)
         except Exception:
             self.stats = {}
         self._render()
