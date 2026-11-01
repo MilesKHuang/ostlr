@@ -36,8 +36,8 @@ FONT_DIR = os.path.join(HERE, "fonts")
 # back to a CJK face (14.00: a small gap inside its two-cell box, but no shift).
 #
 # This is also what Windows Terminal does, and why proJV looks right there.
-DEFAULT_FAMILY = ('"SimHei", "NSimSun", "Microsoft YaHei", "Cascadia Mono", '
-                  'Consolas, monospace')
+DEFAULT_FAMILY = ('"LXGW WenKai Mono", "SimHei", "NSimSun", "Microsoft YaHei", '
+                  '"Cascadia Mono", Consolas, monospace')
 
 _FONT_SUFFIXES = (".ttf", ".otf", ".ttc")
 
@@ -60,21 +60,18 @@ def bundled_font(directory: Optional[str] = None) -> str:
 
 
 def family_for(cfg=None, directory: Optional[str] = None) -> str:
-    """The CSS font stack: bundled CJK face appended, western mono first.
+    """The CSS font stack. Bundled web fonts are referenced by family, not by file.
 
-    A bundled font becomes the CJK fallback, not the primary face: making it
-    primary would take the box-drawing characters from it, and in a CJK font those
-    are full width - the frame would shift by one cell per line.
+    LXGW WenKai Mono (OFL-1.1) is bundled as subsetted woff2 chunks loaded by
+    `fonts/wenkai/mono.css`, so it is already the first family in the default
+    stack; `bundled_font()` covers the older single-file (.ttf/.ttc) route and, if
+    a file is present, registers it as `OstlrMono` in front.
     """
     configured = str(getattr(cfg, "font_family", "") or "").strip() if cfg else ""
     base = configured or DEFAULT_FAMILY
     if bundled_font(directory):
         parts = [p.strip() for p in base.split(",") if p.strip()]
         if "OstlrMono" not in base:
-            # The bundled face goes FIRST: that is the whole point of shipping one,
-            # and it is what the user asked to see. The exact-2:1 families stay in
-            # the stack behind it, so a bundled font that cannot do a character
-            # still falls back to one that can.
             parts.insert(0, "OstlrMono")
         base = ", ".join(parts)
     return base

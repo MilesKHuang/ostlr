@@ -1,4 +1,4 @@
-"""Build the Ostlr exe.
+﻿"""Build the Ostlr exe.
 
     py -3 tools\\build_exe.py              # one folder (recommended, fast start)
     py -3 tools\\build_exe.py --onefile    # single file (slow start, big)

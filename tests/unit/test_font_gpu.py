@@ -19,11 +19,11 @@ class TestFontContract(unittest.TestCase):
             family = fonts.family_for(config.Config(), tmp)
         self.assertEqual("OstlrMono", family.split(",")[0].strip(), family)
 
-    def test_without_a_bundled_font_the_first_family_is_exact_two_to_one(self):
-        # Measured at 14 px: SimHei / NSimSun / SimSun give ASCII 7.00, CJK 14.00.
+    def test_without_a_bundled_file_the_first_family_is_the_bundled_webfont(self):
+        # LXGW WenKai Mono (OFL) ships as woff2 chunks loaded by fonts/wenkai/mono.css,
+        # so it is referenced by family name rather than by a single file.
         family = fonts.family_for(config.Config(), EMPTY_DIR)
-        first = family.split(",")[0].strip().strip('"')
-        self.assertIn(first, ("SimHei", "NSimSun", "SimSun"), family)
+        self.assertIn("LXGW WenKai Mono", family.split(",")[0])
 
     def test_a_cjk_face_is_in_the_stack(self):
         family = fonts.family_for(config.Config(), EMPTY_DIR)
