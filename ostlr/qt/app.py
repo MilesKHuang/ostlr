@@ -1,15 +1,23 @@
-"""The Ostlr window: five regions, as the baseline draws them (3.1).
+"""The Ostlr window: the baseline's regions, after the first hands-on review.
 
-Top bar (new / refresh / focus all + gauges), session list with two-line rows,
-terminal panes, file tree with the launcher's context menu, details, status bar.
+    +--------------------------------------------------------------+
+    | + New session  Refresh  Focus all  [receipt]  [gauges]        |  top bar
+    +----------------+-----------------------------+---------------+
+    | Sessions       |  terminal panes (tabs)      |  Files (dock) |  right dock
+    |  pane-owned    |                             |  Details      |
+    |  cpu/mem bars  |                             |               |
+    +----------------+-----------------------------+---------------+
 
-What this rewrite adds over the previous shell:
+Corrections this version applies:
 
-  * the file tree is the launcher's entry point (right-click -> start here);
-  * gauges instead of bare numbers, so "who is heavy" is a glance;
-  * L1: a pane owns its PTY, so OSC 7501 from the CLI is parsed and stored -
-    projV reports `working` / `blocked` by itself;
-  * copy / inject from the tree into the focused pane, three-part receipt.
+  * the list shows ONLY sessions this panel owns - a lifecycle manager for its
+    own PTYs, not a process browser;
+  * the file tree is docked on the right, where 3.1 draws it;
+  * the receipt moved into the top bar: no row of the window is spent on it;
+  * per-session CPU% / MEM% (GPU MiB when nvidia-smi exists) as bars, instead of
+    raw megabytes nobody can compare;
+  * the window opens inside the screen: half off-screen also made the terminal
+    compute its grid for a width the user could not see.
 """
 
 from __future__ import annotations
@@ -19,8 +27,8 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+    QMenu, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import actions as actions_mod
@@ -28,10 +36,9 @@ from .. import config as config_mod
 from .. import view_model
 from . import (
     discovery, gauges as gauge_mod, launcher as launcher_mod, layout as layout_mod,
-    style, terminal, tray as tray_mod, tree as tree_mod,
+    procstat, style, terminal, tray as tray_mod, tree as tree_mod,
 )
 
-LIST_LIMIT = 200
 GLYPH = {"blocked": "\u25cf", "working": "\u25d0", "idle": "\u25cb",
          "done": "\u2713", "error": "\u2715", "unknown": "\u25cc"}
 
@@ -40,12 +47,11 @@ class MainWindow(QMainWindow):
     def __init__(self, cfg=None, provider=None) -> None:
         super().__init__()
         self.cfg = cfg or config_mod.Config()
-        self._provider = provider or (lambda: {"v": 1, "header": {}, "rows": []})
-        self.snapshot: Dict[str, object] = {"v": 1, "header": {}, "rows": []}
+        self._provider = provider
         self.panes: List[terminal.TerminalPane] = []
         self.pane_by_pid: Dict[int, terminal.TerminalPane] = {}
+        self.stats: Dict[int, Dict[str, Optional[float]]] = {}
         self.selected_pid: Optional[int] = None
-        self.receipt = ""
 
         self.tray = tray_mod.Tray(self)
         self.tray.show_requested.connect(self._show_from_tray)
@@ -53,9 +59,10 @@ class MainWindow(QMainWindow):
         self.tray.quit_requested.connect(self.close)
 
         self.setWindowTitle("Ostlr")
-        self.resize(1440, 880)
         self.setStyleSheet(style.stylesheet())
         self.setCentralWidget(self._build())
+        self._place_window()
+        self._apply_split_sizes()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh_now)
@@ -65,13 +72,37 @@ class MainWindow(QMainWindow):
         if not self.tray.start():
             self._set_receipt("no tray (%s)" % self.tray.reason)
         if not self._restore_layout():
-            self._set_receipt("ready - right-click a folder in the tree to start")
+            self._set_receipt("ready - right-click a folder in Files to start a session")
 
-    # --- layout ---------------------------------------------------------
+    # --- window placement ------------------------------------------------
+    def _place_window(self) -> None:
+        saved = layout_mod.load().get("window") or {}
+        if saved.get("geometry"):
+            try:
+                self.restoreGeometry(bytes.fromhex(str(saved["geometry"])))
+                if saved.get("maximized"):
+                    self.showMaximized()
+                return
+            except Exception:
+                pass
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        if available is None:
+            self.resize(1400, 860)
+            return
+        # Open big but inside the work area: a window half off the screen also
+        # made the terminal compute a grid for a width the user could not see.
+        width = min(int(available.width() * 0.92), 2000)
+        height = min(int(available.height() * 0.92), 1200)
+        self.resize(width, height)
+        self.move(available.left() + (available.width() - width) // 2,
+                  available.top() + (available.height() - height) // 2)
+
+    # --- layout ----------------------------------------------------------
     def _build(self) -> QWidget:
         central = QWidget(self)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(8, 8, 8, 6)
+        outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
         bar = QHBoxLayout()
@@ -85,7 +116,10 @@ class MainWindow(QMainWindow):
             button.clicked.connect(slot)
             bar.addWidget(button)
             self.actions[key] = button
-        bar.addStretch(1)
+        self.receipt_label = QLabel("", self)
+        self.receipt_label.setStyleSheet("color: %s;" % style.ROLES["fg_dim"])
+        bar.addSpacing(12)
+        bar.addWidget(self.receipt_label, 1)
         self.gauges = gauge_mod.GaugeRow(self)
         bar.addWidget(self.gauges)
         outer.addLayout(bar)
@@ -94,63 +128,80 @@ class MainWindow(QMainWindow):
         self.banner_label.setWordWrap(True)
         outer.addWidget(self.banner_label)
 
-        main = QSplitter(Qt.Horizontal, self)
-        outer.addWidget(main, 1)
+        body = QSplitter(Qt.Horizontal, self)
+        outer.addWidget(body, 1)
 
-        left = QWidget(main)
+        left = QWidget(body)
+        left.setMinimumWidth(300)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("Sessions", left))
+        left_layout.addWidget(QLabel("Sessions (owned by this panel)", left))
         self.list = QListWidget(left)
-        self.list.setMinimumWidth(390)
+        self.list.setMinimumWidth(380)
         self.list.itemSelectionChanged.connect(self._on_select)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._session_menu)
-        left_layout.addWidget(self.list, 3)
-        left_layout.addWidget(QLabel("Resources", left))
-        self.bars = gauge_mod.RowBars(left)
-        left_layout.addWidget(self.bars, 1)
-        main.addWidget(left)
+        left_layout.addWidget(self.list, 1)
+        body.addWidget(left)
 
-        right = QWidget(main)
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabWidget(right)
+        self.tabs = QTabWidget(body)
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
-        right_layout.addWidget(self.tabs, 3)
-        # The main area is not left blank: without a pane it says where a session
-        # comes from. An empty black rectangle reads as a broken window.
+        body.addWidget(self.tabs)
         self.placeholder = QLabel(
             "No terminal yet.\n\n"
-            "Right-click a folder in the file tree below ->  \"Start a TUI here...\"\n"
-            "or press \"+ New session\" in the top bar.\n\n"
-            "A session started here is owned by the panel: its PTY, its window size,\n"
-            "its state (OSC 7501 when the CLI reports one, otherwise the panel's own\n"
-            "record), and it is marked with * in the list.", self)
+            "Right-click a folder in Files -> \"Start a TUI here...\"\n"
+            "or press \"+ New session\".\n\n"
+            "Only sessions started here are listed: the panel owns their PTY, their\n"
+            "size and their state (OSC 7501 when the CLI reports one).", self)
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setWordWrap(True)
         self.tabs.addTab(self.placeholder, "welcome")
-        bottom = QSplitter(Qt.Horizontal, right)
-        self.tree = tree_mod.FileTree(self._initial_root(), bottom)
+
+        dock = QSplitter(Qt.Vertical, body)
+        dock.setMinimumWidth(320)
+        self.tree = tree_mod.FileTree(self._initial_root(), dock)
         self.tree.start_here.connect(self.start_session)
         self.tree.open_terminal.connect(self.open_terminal_here)
         self.tree.inject_path.connect(self.inject_path_into_pane)
         self.tree.copied.connect(lambda path: self._receipt_copy(path, from_tree=True))
-        bottom.addWidget(self.tree)
-        self.detail = QLabel("", bottom)
+        dock.addWidget(self.tree)
+        self.detail = QLabel("", dock)
         self.detail.setWordWrap(True)
         self.detail.setAlignment(Qt.AlignTop)
         self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        bottom.addWidget(self.detail)
-        bottom.setSizes([620, 420])
-        right_layout.addWidget(bottom, 2)
-        main.addWidget(right)
-        main.setSizes([420, 1020])
+        dock.addWidget(self.detail)
+        dock.setSizes([520, 320])
+        body.addWidget(dock)
 
-        self.status_label = QLabel("Ready", self)
-        outer.addWidget(self.status_label)
+        body.setStretchFactor(0, 0)   # session list keeps its width
+        body.setStretchFactor(1, 1)   # the terminal takes every extra pixel
+        body.setStretchFactor(2, 0)   # the dock keeps its width
+        self.body = body
         return central
+
+    def _apply_split_sizes(self, width: Optional[int] = None) -> None:
+        """Give the terminal the space that is actually there.
+
+        Qt keeps a splitter's absolute sizes, so they have to be recomputed
+        whenever the window changes size. Using `self.width()` inside
+        `resizeEvent` reads the OLD width, which left the dock squeezed out of the
+        window and the terminal on a grid the user could not see.
+        """
+        width = int(width or self.width() or 1200)
+        left = max(300, int(width * 0.20))
+        dock = max(320, int(width * 0.22))
+        terminal = max(320, width - left - dock)
+        self.body.setSizes([left, terminal, dock])
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        size = event.size()
+        super().resizeEvent(event)
+        # Defer: the splitter's own geometry is updated after this returns.
+        QTimer.singleShot(0, lambda w=size.width(): self._apply_split_sizes(w))
+        pane = self._focused_pane()
+        if pane is not None:
+            QTimer.singleShot(150, lambda p=pane: self._refit(p))
 
     def _initial_root(self) -> str:
         for candidate in (getattr(self.cfg, "last_dirs", None) or []):
@@ -158,7 +209,7 @@ class MainWindow(QMainWindow):
                 return candidate
         return os.getcwd()
 
-    # --- panes ------------------------------------------------------------
+    # --- panes -----------------------------------------------------------
     def _make_pane(self, argv=None, cwd=None, title=None):
         if len(self.panes) >= terminal.MAX_PANES:
             self._set_receipt("pane limit reached (%d)" % terminal.MAX_PANES)
@@ -178,9 +229,9 @@ class MainWindow(QMainWindow):
         self._set_receipt("%s -> pane (pid %d)" % (pane.title, pid))
         self.refresh_now()
 
-    def _on_l1(self, pid: int, report: Dict[str, object]) -> None:
+    def _on_l1(self, pid: int, report) -> None:
         """A CLI told us its own state over OSC 7501: trust it above everything."""
-        state = str(report.get("state") or "")
+        state = str((report or {}).get("state") or "")
         if not pid or not state or state == "clear":
             return
         try:
@@ -202,10 +253,17 @@ class MainWindow(QMainWindow):
         index = self.tabs.addTab(pane, pane.title)
         self.tabs.setCurrentIndex(index)
         pane.focus_terminal()
+        QTimer.singleShot(250, lambda p=pane: self._refit(p))
         return pane
 
+    def _refit(self, pane) -> None:
+        """The pane recomputes its grid; call it after any layout change."""
+        try:
+            pane._refit()
+        except Exception:
+            pass
+
     def _drop_placeholder(self) -> None:
-        """The welcome tab exists only while there is nothing to show."""
         if getattr(self, "placeholder", None) is None:
             return
         index = self.tabs.indexOf(self.placeholder)
@@ -235,60 +293,85 @@ class MainWindow(QMainWindow):
                     del self.pane_by_pid[pid]
             pane.bridge.stop()
             pane.deleteLater()
+        if not self.panes and getattr(self, "placeholder", None) is None:
+            self.placeholder = QLabel("No terminal yet.", self)
+            self.placeholder.setAlignment(Qt.AlignCenter)
+            self.tabs.addTab(self.placeholder, "welcome")
 
     def _on_pane_exit(self, pane, reason: str) -> None:
         self._set_receipt("%s: %s" % (pane.title, reason))
         self.refresh_now()
 
-    # --- snapshot ---------------------------------------------------------
+    # --- the list: only what this panel owns ------------------------------
+    def pane_rows(self) -> List[Dict[str, object]]:
+        """One row per owned pane, with its live state and workload.
+
+        Correction 1: an external process is not a session here. If the panel did
+        not start it, the panel does not claim to manage it - and does not fill
+        the list with `unknown` rows it can do nothing about.
+        """
+        from .. import status as status_mod
+        rows: List[Dict[str, object]] = []
+        for pane in self.panes:
+            pid = int(getattr(pane, "session_pid", 0) or 0)
+            if not pid:
+                continue
+            record = status_mod.read_status(pid) or {}
+            stats = self.stats.get(pid) or {}
+            rows.append({
+                "pid": pid,
+                "state": str(record.get("state") or "working"),
+                "source": str(record.get("source") or "ostlr-pane"),
+                "agent": pane.title,
+                "project": os.path.basename(pane.cwd or "") or "?",
+                "cwd": pane.cwd or "",
+                "msg": str(record.get("msg") or ""),
+                "kind": str(record.get("kind") or ""),
+                "cpu": stats.get("cpu"),
+                "mem": stats.get("mem"),
+                "gpu": stats.get("gpu"),
+                "rss": stats.get("rss"),
+            })
+        return rows
+
     def refresh_now(self):
+        pids = [int(getattr(p, "session_pid", 0) or 0) for p in self.panes]
         try:
-            self.snapshot = self._provider() or {"v": 1, "header": {}, "rows": []}
-        except Exception as exc:
-            self._set_receipt("refresh failed: %s" % exc)
-            return self.snapshot
+            self.stats = procstat.sample([pid for pid in pids if pid])
+        except Exception:
+            self.stats = {}
         self._render()
-        return self.snapshot
+        return {"rows": self.pane_rows()}
 
     def _render(self) -> None:
-        header = self.snapshot.get("header") or {}
-        rows = list(self.snapshot.get("rows") or [])[:LIST_LIMIT]
+        rows = self.pane_rows()
         keep = self.selected_pid
-
         self.list.blockSignals(True)
         self.list.clear()
         for row in rows:
-            owned = int(row.get("pid") or 0) in self.pane_by_pid
-            self.list.addItem(self._row_item(row, owned))
+            self.list.addItem(self._row_item(row))
         self.list.blockSignals(False)
-
         if keep is not None:
             for index in range(self.list.count()):
-                row = self.list.item(index).data(Qt.UserRole)
-                if int(row.get("pid") or 0) == keep:
+                item_row = self.list.item(index).data(Qt.UserRole)
+                if int(item_row.get("pid") or 0) == keep:
                     self.list.setCurrentRow(index)
                     break
 
-        self.gauges.update_from(header, rows)
-        self.bars.set_entries(rows)
+        blocked = sum(1 for row in rows if row["state"] == "blocked")
+        working = sum(1 for row in rows if row["state"] == "working")
+        self.gauges.update_from({"waiting": blocked, "running": working}, rows)
         self._render_banner(rows)
         self._render_detail()
-        self.tray.update(int(header.get("waiting") or 0), int(header.get("running") or 0))
+        self.tray.update(blocked, working)
 
-    def _row_item(self, row: Dict[str, object], owned: bool) -> QListWidgetItem:
-        """Two lines, as baseline 3.1/3.2 draws a row."""
-        glyph = GLYPH.get(str(row.get("state") or "unknown"), "\u25cc")
-        agent = str(row.get("agent") or "unknown")
-        project = str(row.get("project") or "?")
-        branch = view_model.branch_text(row.get("branch"))
-        star = "*" if owned else " "
-        line1 = "%s %s %s   %s" % (glyph, star, agent, project)
-        line2 = "      %s   %s   %s" % (
-            view_model.state_word(row),
-            view_model.format_elapsed(row.get("elapsed_s")),
-            view_model.format_mem(row.get("mem_bytes")))
-        if branch != "?":
-            line1 = "%s   %s" % (line1, branch)
+    def _row_item(self, row: Dict[str, object]) -> QListWidgetItem:
+        glyph = GLYPH.get(str(row["state"]), "\u25cc")
+        line1 = "%s %s   %s   %s" % (glyph, row["agent"], row["project"],
+                                     view_model.state_word(row))
+        line2 = "     cpu %-4s  mem %-5s  gpu %-6s  %s" % (
+            procstat.format_cpu(row.get("cpu")), procstat.format_mem(row.get("mem")),
+            procstat.format_gpu(row.get("gpu")), view_model.format_mem(row.get("rss")))
         item = QListWidgetItem("%s\n%s" % (line1, line2))
         item.setData(Qt.UserRole, row)
         role = view_model.role_for(row)
@@ -296,19 +379,29 @@ class MainWindow(QMainWindow):
         return item
 
     def _render_banner(self, rows) -> None:
-        stale = str(self.snapshot.get("stale") or "")
-        if stale:
-            self.banner_label.setText(stale)
+        if not rows:
+            self.banner_label.setText("")
             return
-        reporting = sum(1 for row in rows
-                        if str(row.get("source")) in ("l1", "l2", "ostlr-pane"))
-        unknown = sum(1 for row in rows if str(row.get("state")) == "unknown")
-        # `unknown == total` is the only case the banner speaks about: it exists
-        # for "nothing is reporting", not for a panel that is simply quiet.
-        self.banner_label.setText(view_model.unknown_banner(len(rows), unknown, reporting))
+        unknown = sum(1 for row in rows if row["state"] == "unknown")
+        self.banner_label.setText(
+            view_model.unknown_banner(len(rows), unknown, len(rows) - unknown))
 
     def _render_detail(self) -> None:
-        self.detail.setText("\n".join(view_model.detail_lines(self._selected_row())))
+        row = self._selected_row()
+        if not row:
+            self.detail.setText("No pane selected.\n\nStart a TUI from Files, "
+                                "then click its row.")
+            return
+        lines = [str(row.get("agent")),
+                 "state   %s  (%s)" % (row["state"], row["source"]),
+                 "dir     %s" % (row.get("cwd") or "?"),
+                 "cpu     %s" % procstat.format_cpu(row.get("cpu")),
+                 "memory  %s  (%s)" % (procstat.format_mem(row.get("mem")),
+                                       view_model.format_mem(row.get("rss"))),
+                 "gpu     %s" % procstat.format_gpu(row.get("gpu"))]
+        if row.get("msg"):
+            lines.append("message %s" % str(row["msg"])[:120])
+        self.detail.setText("\n".join(lines))
 
     # --- selection / receipts ---------------------------------------------
     def _selected_row(self):
@@ -321,8 +414,11 @@ class MainWindow(QMainWindow):
         self._render_detail()
 
     def _set_receipt(self, text: str) -> None:
-        self.receipt = text
-        self.status_label.setText(text)
+        self.receipt_label.setText(text)
+
+    @property
+    def receipt(self) -> str:
+        return self.receipt_label.text()
 
     def _focused_pane(self):
         widget = self.tabs.currentWidget()
@@ -381,22 +477,18 @@ class MainWindow(QMainWindow):
         self._set_receipt(str(result.get("receipt") or result.get("reason") or "focus"))
 
     def focus_all(self) -> None:
-        seen = set()
+        focused = 0
         for pane in self.panes:
-            if not pane.cwd or pane.cwd in seen:
-                continue
-            seen.add(pane.cwd)
-            actions_mod.focus(getattr(pane, "session_pid", 0) or 0)
-        self._set_receipt("focused %d pane(s)" % len(seen))
+            if actions_mod.focus(getattr(pane, "session_pid", 0) or 0).get("ok"):
+                focused += 1
+        self._set_receipt("focused %d pane window(s)" % focused)
 
     # --- sessions: start / kill -------------------------------------------
     def start_session(self, directory=None) -> None:
-        """Open the selector; it is the only way in (baseline 3.3).
+        """Open the selector. `chosen` is the whole contract: Cancel leaves it None.
 
-        The dialog's `chosen` is the whole contract: a Cancel leaves it None, so
-        this never depends on an enum name on the instance (PySide6 exposes
-        `Accepted` on the class, not on the object - the reason for the
-        AttributeError this replaces).
+        (PySide6 exposes `Accepted` on QDialog the class, not on an instance -
+        reading it from the dialog raised AttributeError on the first click.)
         """
         dialog = launcher_mod.Launcher(self.cfg, directory, self)
         dialog.exec()
@@ -405,11 +497,11 @@ class MainWindow(QMainWindow):
         self.start_from(dict(dialog.chosen), dialog.directory, dialog.location)
 
     def start_from(self, entry: Dict[str, object], directory: str,
-                   location: str = "panel") -> None:
+                   location: str = "panel"):
         command = discovery.resolve(str(entry.get("command")))
         if not command:
             self._set_receipt("not found: %s" % entry.get("command"))
-            return
+            return None
         args = [str(a) for a in (entry.get("args") or [])]
         info = discovery.home_of(command)
         title = "%s @ %s" % (entry.get("id") or os.path.basename(command),
@@ -418,7 +510,7 @@ class MainWindow(QMainWindow):
             result = actions_mod.launch({"command": command, "args": args}, directory)
             self._set_receipt("started in its own window: %s"
                               % (result.get("reason") or result.get("detail") or "?"))
-            return
+            return None
         pane = self.new_terminal([command] + args, cwd=directory, title=title)
         if pane is None:
             return None
@@ -432,31 +524,29 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu(self)
         menu.setStyleSheet(style.stylesheet())
-        cwd = str(row.get("cwd") or "")
-        open_pane = menu.addAction("Open a terminal in its directory")
-        open_pane.triggered.connect(lambda: self.open_terminal_here(cwd))
-        focus = menu.addAction("Focus its window")
-        focus.triggered.connect(self.focus_selected)
-        copy = menu.addAction("Copy its directory")
-        copy.triggered.connect(self.copy_selected_path)
+        menu.addAction("Open a terminal in its directory",
+                       lambda: self.open_terminal_here(str(row.get("cwd") or "")))
+        menu.addAction("Focus its window", self.focus_selected)
+        menu.addAction("Copy its directory", self.copy_selected_path)
         menu.addSeparator()
-        kill = menu.addAction("End this session...")
-        kill.triggered.connect(lambda: self.kill_session(row))
+        menu.addAction("End this session...", lambda: self.kill_session(row))
         menu.exec(self.list.viewport().mapToGlobal(position))
 
     def kill_session(self, row: Dict[str, object]) -> None:
         """Baseline 3.6: show what will die before anything runs."""
+        from PySide6.QtWidgets import QMessageBox as _Box
         pid = int(row.get("pid") or 0)
-        mem = view_model.format_mem(row.get("mem_bytes"))
         answer = QMessageBox.question(
             self, "End session",
-            "End %s (pid %d)?\n\nIts whole process tree is terminated; the tree holds "
-            "about %s right now." % (row.get("agent") or "?", pid, mem))
-        from PySide6.QtWidgets import QMessageBox as _Box
+            "End %s (pid %d)?\n\nIts whole process tree is terminated; it currently "
+            "uses %s of memory." % (row.get("agent") or "?", pid,
+                                    view_model.format_mem(row.get("rss"))))
         if answer != _Box.StandardButton.Yes:
             return
-        result = actions_mod.kill({"pid": pid, "started_at": row.get("started_at"),
-                                   "cwd": row.get("cwd")})
+        pane = self.pane_by_pid.get(pid)
+        if pane is not None:
+            pane.bridge.stop()
+        result = actions_mod.kill({"pid": pid, "started_at": 0, "cwd": row.get("cwd")})
         self._set_receipt(str(result.get("receipt") or result.get("reason")))
         self.refresh_now()
 
@@ -465,12 +555,11 @@ class MainWindow(QMainWindow):
         tabs: List[Dict[str, object]] = []
         for index in range(self.tabs.count()):
             widget = self.tabs.widget(index)
-            panes = ([widget] if not isinstance(widget, QSplitter)
-                     else [widget.widget(i) for i in range(widget.count())])
-            entries = [{"argv": p.argv, "cwd": p.cwd or ""} for p in panes
-                       if isinstance(p, terminal.TerminalPane)]
-            if entries:
-                tabs.append(layout_mod.tab_entry(self.tabs.tabText(index), entries))
+            if not isinstance(widget, terminal.TerminalPane):
+                continue
+            tabs.append(layout_mod.tab_entry(
+                self.tabs.tabText(index),
+                [{"argv": widget.argv, "cwd": widget.cwd or ""}]))
         return tabs
 
     def _restore_layout(self) -> bool:
@@ -480,11 +569,11 @@ class MainWindow(QMainWindow):
         restored = 0
         for entry in data.get("tabs") or []:
             first = (entry.get("panes") or [{}])[0]
-            if self._make_pane(first.get("argv") or None, first.get("cwd") or None,
-                               title=str(entry.get("title") or "shell")) is None:
+            if not first.get("argv"):
+                continue
+            if self.new_terminal(first.get("argv"), first.get("cwd") or None,
+                                 title=str(entry.get("title") or "shell")) is None:
                 break
-            pane = self.panes[-1]
-            self.tabs.addTab(pane, pane.title)
             restored += 1
         if restored:
             self._set_receipt("layout restored (%d tab(s))" % restored)
@@ -497,7 +586,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         try:
-            layout_mod.save(self._layout_payload(), self.tabs.currentIndex())
+            payload = self._layout_payload()
+            layout_mod.save(payload, self.tabs.currentIndex())
+            layout_mod.save_window(self.saveGeometry().toHex().decode("ascii"),
+                                   self.isMaximized())
         except Exception:
             pass
         self.tray.stop()

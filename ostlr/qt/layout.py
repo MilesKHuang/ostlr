@@ -24,7 +24,9 @@ def layout_path() -> str:
 def save(tabs: List[Dict[str, Any]], active: int = 0, path: Optional[str] = None) -> str:
     """Write the layout atomically. Returns the path written ("" on failure)."""
     target = path or layout_path()
-    payload = {"v": 1, "active": int(active), "tabs": list(tabs or [])[:MAX_RESTORE]}
+    previous = load(target)
+    payload = {"v": 1, "active": int(active), "tabs": list(tabs or [])[:MAX_RESTORE],
+               "window": previous.get("window") or {}}
     tmp = target + ".tmp"
     try:
         os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -40,6 +42,23 @@ def save(tabs: List[Dict[str, Any]], active: int = 0, path: Optional[str] = None
         return ""
 
 
+def save_window(geometry_hex: str, maximized: bool = False,
+                path: Optional[str] = None) -> str:
+    """Remember the window rectangle, so the panel opens where the user left it."""
+    target = path or layout_path()
+    data = load(target)
+    data["window"] = {"geometry": geometry_hex, "maximized": bool(maximized)}
+    tmp = target + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp, target)
+        return target
+    except OSError:
+        return ""
+
+
 def load(path: Optional[str] = None) -> Dict[str, Any]:
     """Read the layout, or an empty one. Never raises on a broken file."""
     target = path or layout_path()
@@ -51,7 +70,9 @@ def load(path: Optional[str] = None) -> Dict[str, Any]:
     if not isinstance(data, dict):
         return {"v": 1, "active": 0, "tabs": []}
     tabs = [t for t in (data.get("tabs") or []) if isinstance(t, dict)][:MAX_RESTORE]
-    return {"v": 1, "active": int(data.get("active") or 0), "tabs": tabs}
+    window = data.get("window") if isinstance(data.get("window"), dict) else {}
+    return {"v": 1, "active": int(data.get("active") or 0), "tabs": tabs,
+            "window": window}
 
 
 def tab_entry(title: str, panes: List[Dict[str, Any]], split: str = "h",

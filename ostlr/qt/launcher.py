@@ -161,6 +161,16 @@ class Launcher(QDialog):
         discovery.remember(self.cfg, path)
         self._save()
         self.reload_entries()
+        # Select the program that was just chosen. Without this, reload_entries
+        # restored the *previous* last-agent, so the dialog described a different
+        # exe than the one the user picked - and the api-key state it showed
+        # belonged to that other copy (the report that made this a bug).
+        for index in range(self.combo.count()):
+            entry = self.combo.itemData(index)
+            if entry and os.path.normcase(str(entry.get("command"))) == os.path.normcase(path):
+                self.combo.setCurrentIndex(index)
+                break
+        self._describe()
 
     def _save(self) -> None:
         try:

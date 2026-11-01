@@ -292,6 +292,15 @@ class TerminalPane(QWidget):
             cols, rows = payload["r"]
             self.bridge.resize(int(cols), int(rows))
 
+    def _refit(self) -> None:
+        """Ask the page to recompute its grid after the layout settled."""
+        try:
+            if self._ready and getattr(self, "view", None) is not None:
+                self.view.page().runJavaScript("window.fitNow && window.fitNow()")
+                self.view.page().runJavaScript("window.report && window.report()")
+        except Exception:
+            pass
+
     def focus_terminal(self) -> None:
         self.view.setFocus()
 
