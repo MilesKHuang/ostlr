@@ -29,7 +29,12 @@
 <script src="vendor/xterm.js"></script>
 <script src="vendor/xterm-addon-fit.js"></script>
 <script>
-  const FONT_SIZE = 14;
+  // 40/3 px, not 14: JetBrains Mono's advance is 0.6 em, so the cell is 8.00 CSS px
+  // = 12.00 DEVICE px at 150 % scaling. At 14 px it was 8.402 CSS = 12.604 device,
+  // i.e. every column sat on a different subpixel phase and identical glyphs were
+  // rasterised half a pixel apart - the pixel-level jitter. The font size is the
+  // only knob xterm actually applies to the cell box.
+  const FONT_SIZE = 40 / 3;
 
   // --- the font comes from Python ------------------------------------------
   // A terminal grid only stays aligned when advance(CJK) == 2 * advance(ASCII).
@@ -50,13 +55,34 @@
   const term = new Terminal({
     fontFamily: fontFamily,
     fontSize: FONT_SIZE,
+    // Integer DEVICE-pixel cell: measured 8.402 CSS px * dpr 1.5 = 12.604 device
+    // pixels, so every column landed on a different subpixel phase and the same
+    // glyph rendered half a pixel apart from its neighbour - the "pixel-level
+    // jitter". letterSpacing is set to whatever makes the advance integral on this
+    // display, so the fix follows the DPI and the font instead of hardcoding them.
+    letterSpacing: (function () {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.font = FONT_SIZE + 'px ' + fontFamily;
+        const advance = ctx.measureText('M').width;
+        const dpr = window.devicePixelRatio || 1;
+        const target = Math.round(advance * dpr) / dpr;   // nearest integer device px
+        return Math.max(0, Math.min(1, target - advance));
+      } catch (e) {
+        return 0;
+      }
+    })(),
     // Only the frame is drawn by xterm; all text (Latin and CJK) still comes from
     // the bundled faces. Reason: no CJK face draws its box characters inside one
     // cell, so a font-drawn frame drifts or leaves a seam at every row boundary.
     customGlyphs: true,
     // Integer cell height: at a fractional height the drawn box glyphs leave a
     // hairline gap between rows, which reads as "the vertical bar is broken".
-    lineHeight: 1.0,
+    // lineHeight 1.3 x 13.333 = 17.32 CSS = 25.98 device px - still fractional. The
+    // height is fontSize * lineHeight, so lineHeight is chosen to land on 18 CSS
+    // px = 27.00 device px, which is integral.
+    lineHeight: 18 / (40 / 3),
     letterSpacing: 0,
     rescaleOverlappingGlyphs: true,
     lineHeight: 1.0,
