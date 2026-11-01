@@ -241,6 +241,10 @@ def package_root() -> str:
     here = os.path.abspath(__file__)
     return os.path.dirname(os.path.dirname(here))
 
+def is_frozen() -> bool:
+    """True inside a PyInstaller build: there is no interpreter to point at."""
+    return bool(getattr(sys, "frozen", False))
+
 
 def wrapper_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """The environment the wrapper is started with.
@@ -251,8 +255,12 @@ def wrapper_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     happened" with no row and no reason). Prepending the package root to
     PYTHONPATH makes the wrapper importable from any directory, which is the
     whole point of a launcher. `status.run()` strips it again for the child.
+
+    A frozen exe carries the package inside itself, so there is nothing to add.
     """
     env = dict(os.environ if base is None else base)
+    if is_frozen():
+        return env
     root = package_root()
     current = env.get("PYTHONPATH", "")
     parts = [p for p in current.split(os.pathsep) if p] if current else []

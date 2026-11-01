@@ -139,6 +139,10 @@ def check_cim_stall() -> List[str]:
 
     from .probe import cim
 
+    if getattr(sys, "frozen", False):
+        # A frozen exe has no interpreter to hand a `-c` script to; the probe's
+        # own unit tests cover the timeout path. Say so instead of failing.
+        return [_line(SKIP, "cim stall", "frozen build: no interpreter for the sleepy fake")]
     sleepy = [sys.executable, "-c", "import time; time.sleep(30)"]
     probe = cim.CimProbe(command=sleepy, timeout_ms=3000)
     started = time.monotonic()

@@ -89,6 +89,31 @@ class TestLaunchHandsTheEnvOver(unittest.TestCase):
         self.assertEqual(r"C:\tmp\elsewhere", fake.kwargs["cwd"])
 
 
+class TestFrozenBuild(unittest.TestCase):
+    """A PyInstaller build has no interpreter, so the wrapper is the exe itself."""
+
+    def setUp(self):
+        self._saved = getattr(sys, "frozen", None)
+        sys.frozen = True
+
+    def tearDown(self):
+        if self._saved is None:
+            del sys.frozen
+        else:
+            sys.frozen = self._saved
+
+    def test_the_argv_drops_the_module_form(self):
+        from ostlr import launcher
+
+        argv = launcher.command_for({"command": "claude", "args": ["--fast"]})
+        self.assertEqual([sys.executable, "run", "--", "claude", "--fast"], argv)
+
+    def test_no_pythonpath_is_injected(self):
+        env = actions.wrapper_env({"PYTHONPATH": r"C:\only"})
+        self.assertEqual(r"C:\only", env["PYTHONPATH"])
+        self.assertNotIn(schema.WRAPPER_ROOT_ENV, env)
+
+
 class TestChildEnvironment(unittest.TestCase):
     def test_the_injected_root_is_removed_for_the_child(self):
         from ostlr import status

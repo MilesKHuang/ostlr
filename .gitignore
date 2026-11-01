@@ -4,6 +4,11 @@ __pycache__/
 .venv/
 venv/
 
+# packaged build output (tools/build_exe.py)
+dist/
+build_pyi/
+*.spec
+
 # runtime data (never committed)
 logs/
 *.log

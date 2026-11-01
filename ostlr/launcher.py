@@ -89,7 +89,12 @@ def command_for(template: Any, extra_args: Optional[Sequence[str]] = None,
     else:
         command = _as_text(getattr(template, "command", ""))
     exe = python or sys.executable
-    argv = [exe, "-m", "ostlr", "run", "--"]
+    # A frozen build (PyInstaller) has no `python -m ostlr` to fall back on: the
+    # wrapper subcommand lives inside the same executable.
+    if getattr(sys, "frozen", False) and python is None:
+        argv = [exe, "run", "--"]
+    else:
+        argv = [exe, "-m", "ostlr", "run", "--"]
     if command:
         argv.append(command)
     if isinstance(template, dict):
