@@ -48,11 +48,12 @@
   const term = new Terminal({
     fontFamily: fontFamily,
     fontSize: FONT_SIZE,
-    // Box-drawing characters come from the FONT, not from xterm's own drawing.
-    // The user asked to try the glyph path: it looks native to the face, at the
-    // cost of inheriting that face's box metrics (YaHei draws `|` at 9.92 px in a
-    // 13.68 px cell, so its frame can sit slightly off the grid).
-    customGlyphs: false,
+    // Box-drawing and block characters are drawn by xterm, not taken from the
+    // font: in every CJK face measured here those glyphs are designed differently
+    // from the text (thickness, width, joins), so a frame drawn from the font
+    // looks like a foreign object next to the letters. Drawing them ourselves
+    // keeps `|`, `-` and the corners identical on every row and in every font.
+    customGlyphs: true,
     // Integer cell height: at a fractional height the drawn box glyphs leave a
     // hairline gap between rows, which reads as "the vertical bar is broken".
     lineHeight: 1.0,
