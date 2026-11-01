@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 README = ROOT / "README.md"
 README_ZH = ROOT / "README_zh.md"
-SCREENSHOT = ROOT / "docs" / "ostlr.png"
+SCREENSHOT = ROOT / "docs" / "ostlr.gif"
 NOTES = ROOT / "docs" / "m1-notes.md"
 RECIPE = ROOT / "docs" / "producers" / "claude-hook.md"
 
@@ -93,16 +93,30 @@ class TestBilingualReadme(unittest.TestCase):
     def test_the_screenshot_ships_with_the_repo(self):
         self.assertTrue(SCREENSHOT.exists(), SCREENSHOT)
         self.assertGreater(SCREENSHOT.stat().st_size, 20_000,
-                           "a flat or broken crop is far smaller than a window")
+                           "a flat or broken capture is far smaller than a window")
+
+    def test_the_gif_is_actually_animated(self):
+        # 36 frames of a static window is a still with extra bytes; this is the
+        # cheap guard that the capture follows something that moves.
+        with open(SCREENSHOT, "rb") as handle:
+            head = handle.read(6)
+        self.assertIn(head, (b"GIF89a", b"GIF87a"))
+        self.assertGreater(SCREENSHOT.stat().st_size, 100_000,
+                           "a few frames of a quiet window compress to almost nothing")
 
     def test_both_readmes_show_it(self):
         for path in (README, README_ZH):
             with self.subTest(path=path.name):
-                self.assertIn("docs/ostlr.png", read(path))
+                self.assertIn("docs/ostlr.gif", read(path))
 
     def test_the_two_readmes_link_to_each_other(self):
         self.assertIn("README_zh.md", read(README))
         self.assertIn("README.md", read(README_ZH))
+
+    def test_the_readme_names_the_protocol_and_the_clis_that_speak_it(self):
+        text = read(README)
+        self.assertIn("superlogical.com/rex", text)
+        self.assertIn("github.com/earendil-works/pi", text)
 
     def test_the_chinese_readme_carries_the_same_promises(self):
         text = read(README_ZH)

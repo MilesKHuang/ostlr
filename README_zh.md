@@ -4,9 +4,9 @@
 
 一个窗口，管住这台机器上你跑着的 AI agent 会话：谁在跑、谁**在等你**，一次点击就能聚焦、结束，或者再起一个——每一个都跑在面板自己拥有的真终端里。
 
-![Ostlr：两个 pane，一个在等你审批，列表下面跟着它的文件树](docs/ostlr.png)
+![Ostlr：agent 的会话跑在 pane 里，状态在列表里，目录在树里](docs/ostlr.gif)
 
-图里是两个目录下的两个会话——一个**卡在审批**、一个在干活——各自带 CPU 与内存；列表下面的文件树跟着选中的会话走；顶栏那行是选中会话的详情。
+图里就是**这个项目自己的 agent 在面板里干活**：列表那行写着 `working`，pane 里看得到它在做什么（`[Agent: ExecutingTools]`、`running: exec_shell`），下面的文件树根在它运行的目录。它停下来等你审批时，那行会变成 `blocked`，并带上程序自己给的原因。
 
 自用工具。无云端、无遥测、无账号。
 
@@ -61,6 +61,10 @@ py -3 tools\build_exe.py --onefile     # 单文件，每次启动解包 Chromium
 | **无** | 什么都没报 | 行显示 `unknown` 并给出原因，**永远不是 `idle`** |
 
 在**面板里**启动的会话，子进程有输出时会自己写记录（`source=ostlr-pane`），安静下来就撤回。会讲 OSC 7501 的程序优先级更高，它的报告会**一直保留**，直到程序自己改口。
+
+### 已经支持的 CLI
+
+[Pi](https://github.com/earendil-works/pi) 从 1.4.0 起内置 `ProgramStatusReporter`，所以它的行会自己报 `working`、`blocked`（带对话框标题）、`done`、`error`、`idle`。Claude Code 2.1.295+、Crush 0.98+、Factory Droid，以及走 OpenTUI 0.6.3 的 opencode 发的是同一条序列；proJV 从一开始就有。Ostlr 会应答探测，两边都不需要额外配置。
 
 ### 状态文件
 

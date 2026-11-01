@@ -6,11 +6,12 @@ One window for the AI agent sessions you run on this machine: what is running,
 what is **waiting for you**, and one click to focus, kill or start another - each
 in a real terminal the panel owns.
 
-![Ostlr: two panes, one waiting for an approval, and the file tree under the list](docs/ostlr.png)
+![Ostlr: the agent's session in a pane, its state in the list, its directory in the tree](docs/ostlr.gif)
 
-Two sessions in two directories - one **waiting for an approval**, one working -
-each with its own CPU and memory; the file tree below the list follows whichever
-session is selected; the receipt line describes that session.
+That is this project's agent working inside the panel: the row says `working`,
+the pane shows what it is doing (`[Agent: ExecutingTools]`, `running: exec_shell`),
+and the file tree below the list is rooted in the directory it runs in. A session
+that stops for an approval switches to `blocked` with the reason it gave.
 
 Self-use tool. No cloud, no telemetry, no account.
 
@@ -98,6 +99,14 @@ A session started **in the panel** writes its own record (`source=ostlr-pane`)
 while its child is producing output, and withdraws it when the child goes quiet.
 A program that speaks OSC 7501 outranks that guess, and its report is kept until
 the program says otherwise.
+
+### What already speaks it
+
+[Pi](https://github.com/earendil-works/pi) ships a `ProgramStatusReporter` since
+1.4.0, so its rows report `working`, `blocked` (with the dialog's title), `done`,
+`error` and `idle` by themselves. Claude Code 2.1.295+, Crush 0.98+, Factory Droid
+and opencode (through OpenTUI 0.6.3) emit the same sequence; proJV has since it
+was written. Ostlr answers the probe, so nothing needs configuring on either side.
 
 ### The status file
 
