@@ -24,6 +24,8 @@ desktop.ini
 
 # screenshots and scratch output
 *.png
+# except the one picture the README shows
+!docs/ostlr.png
 *.tmp
 _verify/
 

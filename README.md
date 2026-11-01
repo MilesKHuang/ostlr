@@ -1,23 +1,20 @@
 # Ostlr
 
-A local panel for the AI agent sessions running on this machine: who is running,
-who is **waiting for you**, and one click to focus, kill, restart or start one -
-in a real terminal, inside the panel.
+**English** | [中文](README_zh.md)
+
+One window for the AI agent sessions you run on this machine: what is running,
+what is **waiting for you**, and one click to focus, kill or start another - each
+in a real terminal the panel owns.
+
+![Ostlr: three panes, their CPU and memory, and a proJV TUI running inside](docs/ostlr.png)
+
+Three proJV sessions in three directories, each with a live CPU and memory
+reading; the right dock is the file tree of the directory the selected session
+runs in; the receipt line shows an OSC 7501 report arriving from the program.
 
 Self-use tool. No cloud, no telemetry, no account.
 
 ## What it does
-
-```
-+--------------------------------------------------------------+
-| + New session   Refresh   Focus all              [receipt]    |
-+----------------+--------------------------------+------------+
-| Sessions       | projv                     [x]  | Files      |
-| * projV projV  | projV (TUI)                    | D:\ws\projV|
-|   working      |   ...                          |  src/      |
-|   cpu 3% mem 2%|                                |  docs/     |
-+----------------+--------------------------------+------------+
-```
 
 - **A real terminal, and only that.** The list holds the panes this panel started:
   it owns their PTYs (ConPTY), so it can size them, read their bytes, answer
@@ -28,12 +25,13 @@ Self-use tool. No cloud, no telemetry, no account.
   silence is not idleness - an agent waiting for an approval is silent too.
   `blocked` and `idle` come only from the program itself over OSC 7501 (proJV
   does this) or from a producer's status file. The program's words, never ours.
+  A state that arrived that way is **held** for as long as the process lives.
 - **Tabs.** Each tab is one session; the tabs, their commands and their
   directories come back on the next start.
-- **Discovery in the launcher.** The launcher scans PATH for agent names,
-  remembers whatever you pick with *Browse...*, and states out loud which copy of
-  an exe it will run and whether that copy has an API key. A new agent needs no
-  config edit.
+- **You say what runs.** The launcher lists the programs in `config.toml`;
+  *Browse...* picks an exe, and that pick is written back as a `[[agents]]` entry.
+  It also states out loud which copy of the exe will run and whether that copy has
+  an API key - before the click, not after.
 - **Looks like your terminal.** The pane uses the OS terminal's own font (read
   from Windows Terminal's settings) and lets the terminal draw its own frame, so a
   TUI hosted here looks like the same TUI outside -
@@ -46,8 +44,7 @@ It never looks at a session it did not start. There is no process scan and no
 window-title guessing, so an agent running in Windows Terminal or an editor is not
 in this list - the panel cannot type into it, size it, or read its bytes, and a row
 you cannot act on is a row that teaches you to stop believing the list. Add a
-program by choosing its exe once (the launcher remembers it in `config.toml`); that
-is the whole contract for what appears.
+program by choosing its exe once; that is the whole contract for what appears.
 
 ## Install
 
@@ -68,6 +65,11 @@ py -3 -m ostlr run -- <cmd>    # the producer wrapper
 py -3 -m ostlr.status --list   # what the programs on this machine report
 ```
 
+`--list` prints the status records that exist right now - who is reporting, from
+where, how long ago, and what they said. It reads files, so it never guesses:
+an empty list means nobody is talking, not that nothing is running. Add `--prune`
+to delete the records of pids that are gone.
+
 ## Build the exe
 
 ```
@@ -76,20 +78,20 @@ py -3 tools\build_exe.py --onefile     # one file, unpacks Chromium per start
 ```
 
 `dist\ostlr\ostlr.exe`. Console build on purpose: the same binary answers
-`--once` and `--selftest`.
+`--selftest` and `run`.
 
 ## How a session reports its state
 
 | Level | Source | Status |
 |---|---|---|
 | **L1** | OSC 7501 over the PTY we own | **live**: the pane answers a probe and parses reports; proJV emits them (`L1: done: turn finished`) |
-| **L2** | a JSON status file per pid | works, and the only source that can say `blocked` |
-| **L3** | the window title | weak evidence of liveness only; never `blocked`, never `idle` |
+| **L2** | a JSON status file per pid | works, and the only source that can say `blocked` from outside a pane |
+| **none** | nothing reported | the row says `unknown` with the reason, never `idle` |
 
-A session started **in the panel** writes its own record (`source=ostlr-pane`),
-so it shows a real state immediately and is marked `*` in the list. A session
-started elsewhere shows `unknown` until something reports it - deliberate: "waiting
-for you" rendered as "nothing happening" is the one error that ends trust.
+A session started **in the panel** writes its own record (`source=ostlr-pane`)
+while its child is producing output, and withdraws it when the child goes quiet.
+A program that speaks OSC 7501 outranks that guess, and its report is kept until
+the program says otherwise.
 
 ### The status file
 
@@ -126,8 +128,8 @@ owns the PTY, answers the OSC 7501 probe and parses what the CLI reports (proJV
 does this today), so its row is a report rather than a guess. A stock `claude` or
 `codex` writes no status file and emits no sequence, so its row reads `unknown`
 until something reports - the panel states this on screen rather than showing a
-green row that means nothing. `unknown` is never rendered as `idle`, and L3
-(window titles) can never produce `blocked`.
+green row that means nothing. `unknown` is never rendered as `idle`, and nothing
+here infers a state from a window title.
 
 Two rendering rules matter as much as the state ladder, because both were visible
 before they were understood (`docs/parity.md`): the terminal draws its own frame
@@ -137,14 +139,15 @@ change how it looks.
 
 ## Docs
 
-- [`docs/m1-notes.md`](docs/m1-notes.md) - acceptance, the defects that shipped
-  green, deliberate deferrals, deviations.
+- [`docs/parity.md`](docs/parity.md) - the rendering contract and the numbers
+  behind it.
+- [`docs/m1-notes.md`](docs/m1-notes.md) - M1 acceptance, kept as history.
 - [`docs/producers/claude-hook.md`](docs/producers/claude-hook.md) - the L2 recipe.
-- [`docs/sop/steve-ostlr.md`](docs/sop/steve-ostlr.md) - the agreed plan.
 - [`AGENTS.md`](AGENTS.md) - measured environment facts and the rules.
 
 ## Test
 
 ```
 py -3 -m unittest discover -s tests -v
+py -3 tools\parity_probe.py            # frame gaps and gauge fill, real pane
 ```
