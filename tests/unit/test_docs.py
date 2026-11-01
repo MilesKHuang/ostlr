@@ -111,6 +111,17 @@ class TestBilingualReadme(unittest.TestCase):
         self.assertIn("OSC 7501", text)
         self.assertIn("unknown", text)
 
+    def test_projv_is_credited_with_a_working_link(self):
+        # The panel was built to host it, and it is the one CLI that has been seen
+        # speaking OSC 7501 - the credit is part of the product's story.
+        url = "https://github.com/MilesKHuang/proJV"
+        for path in (README, README_ZH):
+            with self.subTest(path=path.name):
+                text = read(path)
+                self.assertIn("Powered by", text)
+                self.assertIn(url, text)
+                self.assertIn("](%s)" % url, text)
+
 
 class TestRecipe(unittest.TestCase):
     def setUp(self):

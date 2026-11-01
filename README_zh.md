@@ -104,3 +104,7 @@ py -3 -m ostlr run -- <cmd>
 py -3 -m unittest discover -s tests -v
 py -3 tools\parity_probe.py            # 真 pane 里的框线缝隙与进度条填充率
 ```
+
+---
+
+Powered by [proJV](https://github.com/MilesKHuang/proJV) —— 一个原生的 C++ 终端 AI agent，也是这个面板存在的理由。它也是目前**唯一被观察到会发 OSC 7501** 的 CLI，所以它的行说得出 `blocked`，而普通 shell 的行说不出来。
