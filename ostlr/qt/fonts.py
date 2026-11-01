@@ -71,8 +71,11 @@ def family_for(cfg=None, directory: Optional[str] = None) -> str:
     if bundled_font(directory):
         parts = [p.strip() for p in base.split(",") if p.strip()]
         if "OstlrMono" not in base:
-            # After the western mono, before the generic families.
-            parts.insert(1, "OstlrMono")
+            # The bundled face goes FIRST: that is the whole point of shipping one,
+            # and it is what the user asked to see. The exact-2:1 families stay in
+            # the stack behind it, so a bundled font that cannot do a character
+            # still falls back to one that can.
+            parts.insert(0, "OstlrMono")
         base = ", ".join(parts)
     return base
 

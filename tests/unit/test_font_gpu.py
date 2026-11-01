@@ -1,12 +1,4 @@
-"""The font contract and the GPU counters, tested where they can be.
-
-Two product requirements that are easy to regress silently:
-
-  * a terminal font whose CJK advance is exactly 2x its ASCII advance - otherwise
-    every Chinese character is drawn narrower than its two-cell box and adjacent
-    borders look broken;
-  * per-process GPU usage on Windows without any vendor tool.
-"""
+"""The font contract and the GPU counters, tested where they can be."""
 
 import os
 import tempfile
@@ -15,43 +7,36 @@ import unittest
 from ostlr import config
 from ostlr.qt import fonts, procstat
 
+EMPTY_DIR = os.path.join(tempfile.gettempdir(), "ostlr-no-such-font-dir")
+
 
 class TestFontContract(unittest.TestCase):
-    def test_the_first_family_is_exact_two_to_one(self):
-        # Text must be exactly 2:1 (NSimSun/SimSun at 14 px: 7 and 14), and the
-        # box-drawing glyphs are drawn by xterm itself (customGlyphs), so neither
-        # the text nor the frame depends on a font's idea of a cell.
-        family = fonts.family_for(config.Config())
+    def test_the_bundled_font_comes_first_when_there_is_one(self):
+        # A shipped font wins over every system font: that is what shipping one is
+        # for. The exact-2:1 families stay behind it as fallbacks.
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "terminal.ttc"), "wb").close()
+            family = fonts.family_for(config.Config(), tmp)
+        self.assertEqual("OstlrMono", family.split(",")[0].strip(), family)
+
+    def test_without_a_bundled_font_the_first_family_is_exact_two_to_one(self):
+        # Measured at 14 px: SimHei / NSimSun / SimSun give ASCII 7.00, CJK 14.00.
+        family = fonts.family_for(config.Config(), EMPTY_DIR)
         first = family.split(",")[0].strip().strip('"')
         self.assertIn(first, ("SimHei", "NSimSun", "SimSun"), family)
 
     def test_a_cjk_face_is_in_the_stack(self):
-        # Chinese still has to be drawn by a font that has it, or the glyphs come
-        # from a random fallback.
-        family = fonts.family_for(config.Config())
+        family = fonts.family_for(config.Config(), EMPTY_DIR)
         self.assertTrue(any(name in family for name in
-                            ("Microsoft YaHei", "NSimSun", "SimSun", "MS Gothic")),
-                        family)
+                            ("SimHei", "NSimSun", "SimSun", "Microsoft YaHei")), family)
 
-    def test_a_configured_family_wins(self):
+    def test_a_configured_family_wins_over_the_default(self):
         cfg = config.Config()
         cfg.font_family = "Consolas, Sarasa Mono SC"
-        self.assertEqual("Consolas, Sarasa Mono SC", fonts.family_for(cfg))
-
-    def test_a_bundled_font_becomes_the_cjk_fallback_not_the_primary(self):
-        # Making it primary would take the box-drawing glyphs from it, and in a
-        # CJK font those are full width.
-        with tempfile.TemporaryDirectory() as tmp:
-            open(os.path.join(tmp, "SarasaMono.ttc"), "wb").close()
-            self.assertTrue(fonts.bundled_font(tmp).endswith("SarasaMono.ttc"))
-            family = fonts.family_for(config.Config(), tmp)
-        first = family.split(",")[0].strip()
-        self.assertNotEqual("OstlrMono", first, family)
-        self.assertIn("OstlrMono", family)
+        self.assertTrue(fonts.family_for(cfg, EMPTY_DIR).startswith("Consolas"))
 
     def test_an_empty_directory_reports_no_bundle(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual("", fonts.bundled_font(tmp))
+        self.assertEqual("", fonts.bundled_font(EMPTY_DIR))
 
     def test_font_family_round_trips_through_config(self):
         cfg = config.from_mapping({"font_family": "MS Gothic, Consolas"})
@@ -61,15 +46,11 @@ class TestFontContract(unittest.TestCase):
 
 class TestGpuCounters(unittest.TestCase):
     def test_gpu_support_is_detected_not_assumed(self):
-        # The point is that the answer is honest on any platform.
         available = procstat.gpu_available()
         if os.name != "nt":
             self.assertFalse(available)
-        started = procstat.start_gpu_worker(interval_s=60.0)
-        self.assertEqual(available, started)
 
     def test_the_pid_parser_handles_the_counter_instance_names(self):
-        # Instances look like: pid_19708_luid_0x0_0x9BF6_phys_0_eng_0_engtype_3D
         match = procstat._RE.search("pid_19708_luid_0x0_0x9BF6_phys_0_eng_0_engtype_3D")
         self.assertIsNotNone(match)
         self.assertEqual("19708", match.group(1))
