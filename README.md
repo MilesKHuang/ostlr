@@ -9,29 +9,36 @@ Self-use tool. No cloud, no telemetry, no account.
 ## What it does
 
 ```
-+-------------------------------------------------------------+
-| + New terminal  Start a session  Open in panel  Refresh ...  |
-| waiting 1   running 1   unknown 4   sessions 6               |
-+---------------------------+---------------------------------+
-| Sessions                  | shell                     [x]   |
-| * working  projV  projV   |  Windows PowerShell 5.1          |
-| ! blocked  claude projV   |  PS D:\ws\projV> _              |
-|   unknown  codex  sop     |                                 |
-+---------------------------+---------------------------------+
++--------------------------------------------------------------+
+| + New session   Refresh   Focus all              [receipt]    |
++----------------+--------------------------------+------------+
+| Sessions       | projv                     [x]  | Files      |
+| * projV projV  | projV (TUI)                    | D:\ws\projV|
+|   working      |   ...                          |  src/      |
+|   cpu 3% mem 2%|                                |  docs/     |
++----------------+--------------------------------+------------+
 ```
 
-- **A real terminal.** The panel owns the PTY (ConPTY), xterm.js renders it, so
-  a session you start here can be typed into, split and kept. This is what makes
-  the state trustworthy: we read the same bytes the terminal shows.
-- **Session list.** Project, branch, agent, state, time in state, process-tree
-  memory. `blocked` sorts first, then `error`, `working`, `unknown`, `done`,
-  `idle`.
-- **Discovery, not configuration.** The launcher shows what is installed (a PATH
-  scan for agent names), remembers whatever you pick with *Browse...*, and states
-  out loud which copy of an exe it will run and whether that copy has an API key.
-  A new agent needs no config edit.
-- **Tray + layout.** A tray badge counts what waits; the layout (tabs, splits,
-  commands, directories) comes back on the next start.
+- **A real terminal, and only that.** The list holds the panes this panel started:
+  it owns their PTYs (ConPTY), so it can size them, read their bytes, answer
+  protocol probes and type into them. A process it did not start is not listed -
+  the panel does not claim to manage what it cannot see inside.
+- **State you can check.** `working` while output flows; when the child goes quiet
+  the pane **withdraws its claim** and the row falls back to `unknown`, because
+  silence is not idleness - an agent waiting for an approval is silent too.
+  `blocked` and `idle` come only from the program itself over OSC 7501 (proJV
+  does this) or from a producer's status file. The program's words, never ours.
+- **Tabs.** Each tab is one session; the tabs, their commands and their
+  directories come back on the next start.
+- **Discovery in the launcher.** The launcher scans PATH for agent names,
+  remembers whatever you pick with *Browse...*, and states out loud which copy of
+  an exe it will run and whether that copy has an API key. A new agent needs no
+  config edit.
+- **Looks like your terminal.** The pane uses the OS terminal's own font (read
+  from Windows Terminal's settings) and lets the terminal draw its own frame, so a
+  TUI hosted here looks like the same TUI outside -
+  [`docs/parity.md`](docs/parity.md) records the measurements behind that.
+- **Tray.** A tray badge counts what waits.
 
 ## Install
 
@@ -65,8 +72,8 @@ py -3 tools\build_exe.py --onefile     # one file, unpacks Chromium per start
 
 | Level | Source | Status |
 |---|---|---|
-| **L1** | OSC 7501 over the PTY we own | PTY owned; the sequence is **not parsed yet** - that is the next step, not a mystery |
-| **L2** | a JSON status file per pid | works, and is the only source that can say `blocked` |
+| **L1** | OSC 7501 over the PTY we own | **live**: the pane answers a probe and parses reports; proJV emits them (`L1: done: turn finished`) |
+| **L2** | a JSON status file per pid | works, and the only source that can say `blocked` |
 | **L3** | the window title | weak evidence of liveness only; never `blocked`, never `idle` |
 
 A session started **in the panel** writes its own record (`source=ostlr-pane`),
@@ -104,11 +111,19 @@ The copy-paste recipe for a third-party CLI is in
 
 ## The honest limit
 
-`blocked` needs a producer. A stock `claude` or `codex` writes no status file and
-we cannot parse its OSC 7501 yet, so its row reads `unknown` until L1 lands. The
-panel states this on screen rather than showing a green row that means nothing.
-`unknown` is never rendered as `idle`, and L3 (window titles) can never produce
-`blocked`.
+`blocked` needs a producer. A session started **in a pane** now has one: the pane
+owns the PTY, answers the OSC 7501 probe and parses what the CLI reports (proJV
+does this today), so its row is a report rather than a guess. A stock `claude` or
+`codex` writes no status file and emits no sequence, so its row reads `unknown`
+until something reports - the panel states this on screen rather than showing a
+green row that means nothing. `unknown` is never rendered as `idle`, and L3
+(window titles) can never produce `blocked`.
+
+Two rendering rules matter as much as the state ladder, because both were visible
+before they were understood (`docs/parity.md`): the terminal draws its own frame
+(so a TUI's borders are continuous and its gauges are solid), and the default font
+is the OS terminal's own, read from its settings - hosting a TUI here must not
+change how it looks.
 
 ## Docs
 

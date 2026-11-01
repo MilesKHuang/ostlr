@@ -1,5 +1,14 @@
 # M1 notes - acceptance, manual checks, deferrals, deviations
 
+> **Read this as history, not as a description of today's panel.** The M1 build
+> was stdlib-only with a tkinter window that listed every process on the machine
+> and inferred state from L2 files and window titles. The panel since then: owns
+> its PTYs, lists only its own panes, parses L1 (OSC 7501), splits tabs, and lets
+> the terminal draw its frame with the OS terminal's own font. What is true now
+> lives in [`README.md`](../README.md), [`docs/parity.md`](parity.md) and
+> [`AGENTS.md`](../AGENTS.md); the table below is the contract M1 was judged
+> against and is kept verbatim so the record stays honest.
+
 Companion to `docs/sop/steve-ostlr.md` (the agreed plan). This file records what
 a verifier runs, what only a human can judge, what was deliberately not built,
 and where the implementation differs from the plan.

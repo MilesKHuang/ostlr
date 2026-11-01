@@ -45,6 +45,13 @@ py -3 tools\build_exe.py          # dist\ostlr\ostlr.exe (one folder)
 
 ## Do not
 
+- Do not list a process this panel did not start. The list is the panes we own;
+  discovery belongs in the launcher. A row you cannot type into is a lie about
+  what the panel can do.
+- Do not let the font decide geometry. A cell's position belongs to the terminal:
+  keep `customGlyphs` and a renderer that implements it (`docs/parity.md` has the
+  measured numbers). A fallback to the DOM renderer is allowed only when the pane
+  says so in the receipt.
 - Do not invent a state. No data means `unknown`, never `idle`.
 - Do not fake an affordance. If the tray cannot be drawn or a PTY cannot be
   adopted, say so on screen.

@@ -65,10 +65,19 @@ class TestReadme(unittest.TestCase):
         self.assertIn("never rendered as `idle`", self.text)
 
     def test_l1_state_is_stated_truthfully(self):
-        # It used to blame pywinpty; the pane owns a ConPTY now, so the honest
-        # statement is "the sequence is not parsed yet".
-        self.assertIn("not parsed yet", self.text)
+        # The README used to say "the sequence is not parsed yet" and blamed
+        # pywinpty. The pane owns a ConPTY and parses the sequence now, so the
+        # honest statement is that L1 is live and what it can and cannot see.
         self.assertIn("OSC 7501", self.text)
+        self.assertIn("**live**", self.text)
+        self.assertNotIn("not parsed yet", self.text)
+
+    def test_the_renderer_rules_are_stated(self):
+        # Two defects shipped because nothing said the rule out loud: the frame
+        # belongs to the terminal, the font is the OS terminal's.
+        self.assertIn("docs/parity.md", self.text)
+        self.assertIn("draws its own frame", self.text)
+        self.assertIn("OS terminal's own", self.text)
 
 
 class TestRecipe(unittest.TestCase):
