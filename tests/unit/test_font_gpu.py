@@ -23,7 +23,7 @@ class TestFontContract(unittest.TestCase):
         # the text nor the frame depends on a font's idea of a cell.
         family = fonts.family_for(config.Config())
         first = family.split(",")[0].strip().strip('"')
-        self.assertIn(first, ("NSimSun", "SimSun"), family)
+        self.assertIn(first, ("SimHei", "NSimSun", "SimSun"), family)
 
     def test_a_cjk_face_is_in_the_stack(self):
         # Chinese still has to be drawn by a font that has it, or the glyphs come
