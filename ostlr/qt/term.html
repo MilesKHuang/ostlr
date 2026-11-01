@@ -6,8 +6,7 @@
 <link rel="stylesheet" href="vendor/xterm.css">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #101216; overflow: hidden; }
-  #terminal { position: absolute; inset: 0; padding: 6px 4px 4px 8px; }
-  /* The xterm viewport scrollbar, kept thin so it does not eat cells. */
+  #terminal { position: absolute; inset: 0; padding: 4px 2px 2px 6px; }
   .xterm-viewport::-webkit-scrollbar { width: 10px; }
   .xterm-viewport::-webkit-scrollbar-thumb { background: #2a2f38; border-radius: 5px; }
 </style>
@@ -17,9 +16,10 @@
 <script src="vendor/xterm.js"></script>
 <script>
   const term = new Terminal({
-    fontFamily: 'Consolas, "Cascadia Mono", "Microsoft YaHei Mono", monospace',
+    fontFamily: 'Consolas, "Cascadia Mono", monospace',
     fontSize: 14,
-    lineHeight: 1.15,
+    lineHeight: 1.0,
+    letterSpacing: 0,
     cursorBlink: true,
     allowProposedApi: true,
     theme: {
@@ -36,8 +36,39 @@
   });
   term.open(document.getElementById('terminal'));
 
-  // Bytes arrive base64-encoded: no quoting can ever corrupt them, and UTF-8 is
-  // decoded in the browser where the text is actually rendered.
+  // --- fit -----------------------------------------------------------------
+  // A TUI draws for the size it is told. Without fitting, the child believes it
+  // owns 100x30 cells while the pane is a different pixel size, and every box
+  // comes out wrong - the "projV 缩放不对" symptom.
+  function measureCell() {
+    // Measure one cell by writing a known string into an offscreen span styled
+    // like the terminal; this survives any font substitution.
+    const probe = document.createElement('span');
+    probe.textContent = 'W';
+    const style = window.getComputedStyle(document.querySelector('.xterm'));
+    probe.style.fontFamily = style.fontFamily;
+    probe.style.fontSize = style.fontSize;
+    probe.style.lineHeight = style.lineHeight;
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    document.body.appendChild(probe);
+    const rect = probe.getBoundingClientRect();
+    document.body.removeChild(probe);
+    return { w: rect.width || 8, h: rect.height || 16 };
+  }
+
+  function fit() {
+    const holder = document.getElementById('terminal');
+    const cell = measureCell();
+    const cols = Math.max(20, Math.floor((holder.clientWidth - 8) / cell.w));
+    const rows = Math.max(5, Math.floor((holder.clientHeight - 6) / cell.h));
+    if (cols !== term.cols || rows !== term.rows) {
+      term.resize(cols, rows);
+    }
+    send({ r: [term.cols, term.rows] });
+  }
+
+  // --- bridge ---------------------------------------------------------------
   window.writeB64 = function (b64) {
     const raw = atob(b64);
     const bytes = new Uint8Array(raw.length);
@@ -49,21 +80,26 @@
     if (text) term.write('\r\n\x1b[90m[' + text + ']\x1b[0m\r\n');
   };
 
-  window.measure = function () {
-    return { cols: term.cols, rows: term.rows };
-  };
+  window.fitNow = function () { fit(); };
 
   function send(obj) {
-    // The Python side reads these from the JavaScript console: one channel, no
-    // extra dependency, and it survives any URL/quoting rules.
     console.log('OSTLR:' + btoa(unescape(encodeURIComponent(JSON.stringify(obj)))));
   }
 
   term.onData(function (data) { send({ k: data }); });
   term.onResize(function (size) { send({ r: [size.cols, size.rows] }); });
 
-  // Report the first size once the layout has settled.
-  setTimeout(function () { send({ r: [term.cols, term.rows] }); }, 60);
+  let lastW = 0, lastH = 0;
+  new ResizeObserver(function () {
+    const holder = document.getElementById('terminal');
+    if (holder.clientWidth === lastW && holder.clientHeight === lastH) return;
+    lastW = holder.clientWidth; lastH = holder.clientHeight;
+    fit();
+  }).observe(document.getElementById('terminal'));
+
+  // First fit after layout settles, then a second one after fonts load.
+  setTimeout(fit, 30);
+  setTimeout(fit, 300);
   window.termReady = true;
 </script>
 </body>

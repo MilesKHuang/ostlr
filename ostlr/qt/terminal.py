@@ -175,6 +175,8 @@ class TerminalPane(QWidget):
 
     titleChanged = Signal(str)
     exited = Signal(str)
+    # (pid, report): an OSC 7501 report from the CLI running in this pane.
+    l1_report = Signal(int, dict)
 
     def __init__(self, argv, cwd: Optional[str] = None, title: str = "",
                  parent=None) -> None:
@@ -187,6 +189,12 @@ class TerminalPane(QWidget):
         # Filled in once the PTY reports its pid: this is the session identity.
         self.session_pid = 0
         self.exited_code = None
+        self._l1 = None
+        try:
+            from ..probe import l1 as l1_mod
+            self._l1 = l1_mod.Stream()
+        except Exception:
+            self._l1 = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -235,6 +243,18 @@ class TerminalPane(QWidget):
         self._pending.clear()
 
     def _on_data(self, chunk: bytes) -> None:
+        # L1 lives here: the CLI writes OSC 7501 into the same stream we render,
+        # so this is the only place that can see it. The bytes still go to xterm
+        # (the sequence is zero-width and ignored there).
+        try:
+            from ..probe import l1 as l1_mod
+            reports, probe = self._l1.feed(chunk)
+            if probe:
+                self.bridge.write(l1_mod.PROBE)   # answer immediately, or the CLI stays silent
+            for report in reports:
+                self.l1_report.emit(self.session_pid, report)
+        except Exception:
+            pass
         if not self._ready:
             self._pending.append(chunk)
             return

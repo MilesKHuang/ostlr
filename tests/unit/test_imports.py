@@ -80,34 +80,35 @@ class TestDeclaredDependencies(unittest.TestCase):
 
 
 class TestL1Stub(unittest.TestCase):
-    def test_supported_is_false(self):
+    def test_supported_is_true_for_pane_sessions(self):
+        # L1 used to be a stub. A pane owns its PTY, so the sequence is
+        # observable there; sessions outside the panel still fall back to L2/L3.
         from ostlr.probe import l1
 
-        self.assertFalse(l1.supported())
+        self.assertTrue(l1.supported())
 
-    def test_probe_reports_unsupported_with_a_reason(self):
+    def test_probe_reports_the_current_capability(self):
         from ostlr.probe import l1
 
         result = l1.probe()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["state"], "unsupported")
-        self.assertIn("OSC 7501", result["reason"])
-        # The reason must name the CURRENT blocker. It used to blame pywinpty;
-        # the pane owns a ConPTY now, so blaming the PTY would be a lie.
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "supported")
+        self.assertIn("pane", result["reason"])
+        # It used to blame pywinpty; the pane owns a ConPTY now.
         self.assertNotIn("pywinpty", result["reason"])
 
-    def test_combine_is_unsupported(self):
+    def test_combine_without_a_report_is_unknown_not_a_guess(self):
         from ostlr.probe import l1
 
         result = l1.combine(None, "claude - thinking", True, 0, None)
-        self.assertEqual(result["state"], "unsupported")
+        self.assertEqual(result["state"], "unknown")
+        self.assertEqual("none", result["source"])
 
-    def test_selftest_line_is_a_skip(self):
+    def test_selftest_line_is_a_pass(self):
         from ostlr.probe import l1
 
         line = l1.selftest_line()
-        self.assertTrue(line.startswith("SKIP l1:"), line)
-        self.assertIn("unsupported", line)
+        self.assertTrue(line.startswith("PASS l1"))
 
 
 class TestSelftestLines(unittest.TestCase):
@@ -144,7 +145,8 @@ class TestSelftestLines(unittest.TestCase):
 
         lines = selftest.check_l1()
         self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].startswith("SKIP l1:"), lines[0])
+        # L1 is live for pane sessions now, so the selftest reports PASS.
+        self.assertTrue(lines[0].startswith("PASS l1:"), lines[0])
 
 
 if __name__ == "__main__":

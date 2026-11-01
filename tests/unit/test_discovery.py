@@ -1,4 +1,4 @@
-﻿"""Discovery: the launcher must find what is installed, not what we listed.
+"""Discovery: the launcher must find what is installed, not what we listed.
 
 The first build demanded `config.toml` edits to launch a new agent. These tests
 pin the replacement: whole-name matching (so "pi" is not ping), remembered picks

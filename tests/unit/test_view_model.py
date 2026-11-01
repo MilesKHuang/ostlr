@@ -1,4 +1,4 @@
-﻿"""T9a/T9b - the view model: rows, buckets, ordering, formatting.
+"""T9a/T9b - the view model: rows, buckets, ordering, formatting.
 
 Everything here is pure and `now` is a parameter, so the 3 s highlight and the
 600 s retention are proven without sleeping.

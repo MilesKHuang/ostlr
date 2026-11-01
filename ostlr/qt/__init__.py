@@ -30,7 +30,7 @@ def run_panel(cfg=None) -> int:
     app.setApplicationName("Ostlr")
     app.setOrganizationName("ostlr")
 
-    from .shell import MainWindow
+    from .app import MainWindow
     window = MainWindow(cfg, provider=lambda: cli.build_snapshot(cfg))
     window.show()
     return app.exec()
@@ -44,7 +44,7 @@ def run_headless_probe(cfg) -> int:
     os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --no-sandbox")
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from .. import __main__ as cli
-    from .shell import MainWindow
+    from .app import MainWindow
     window = MainWindow(cfg, provider=lambda: cli.build_snapshot(cfg))
     window.show()
     QTimer.singleShot(2500, window.close)
