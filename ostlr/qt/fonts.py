@@ -36,7 +36,7 @@ FONT_DIR = os.path.join(HERE, "fonts")
 # back to a CJK face (14.00: a small gap inside its two-cell box, but no shift).
 #
 # This is also what Windows Terminal does, and why proJV looks right there.
-DEFAULT_FAMILY = ('"NSimSun", "SimSun", "Microsoft YaHei", "Cascadia Mono", '
+DEFAULT_FAMILY = ('"SimHei", "NSimSun", "Microsoft YaHei", "Cascadia Mono", '
                   'Consolas, monospace')
 
 _FONT_SUFFIXES = (".ttf", ".otf", ".ttc")

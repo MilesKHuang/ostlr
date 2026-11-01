@@ -21,3 +21,9 @@ status/
 .idea/
 Thumbs.db
 desktop.ini
+
+# screenshots and scratch output
+*.png
+*.tmp
+_verify/
+

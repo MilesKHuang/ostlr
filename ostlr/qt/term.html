@@ -51,6 +51,11 @@
     // frame drifted by a fraction of a pixel per row - invisible on one line,
     // obvious as soon as Chinese and English alternate.
     customGlyphs: true,
+    // Integer cell height: at a fractional height the drawn box glyphs leave a
+    // hairline gap between rows, which reads as "the vertical bar is broken".
+    lineHeight: 1.0,
+    letterSpacing: 0,
+    rescaleOverlappingGlyphs: true,
     lineHeight: 1.0,
     cursorBlink: true,
     allowProposedApi: true,
@@ -108,8 +113,7 @@
     // the whole TUI repaint for nothing. Only a real change (>1 cell) counts.
     if (Math.abs(cols - term.cols) <= 1 && Math.abs(rows - term.rows) <= 1) {
       return;
-    }
-    if (cols !== term.cols || rows !== term.rows) {
+    }    if (cols !== term.cols || rows !== term.rows) {
       const alternate = term.buffer.active.type === 'alternate';
       const shrank = cols < term.cols || rows < term.rows;
       term.resize(cols, rows);
