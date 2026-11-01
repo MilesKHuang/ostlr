@@ -488,7 +488,11 @@ def unknown_banner(total: int, unknown: int, producers: int = 0) -> str:
     unknown = max(0, _as_int(unknown, 0))
     if total <= 0 or unknown < total:
         return ""
-    if producers <= 0:
+    # Some rows carry a real state (an L1/L2 report), so "nothing is reporting"
+    # would be a lie; the panel is simply quiet for the rest.
+    if producers > 0:
+        return "No fresh state for %d session(s). Rows with a report are live; the " \
+               "rest are waiting for one." % total
         return ("Nothing is reporting a state yet. Sessions started with the Start "
                 "button report automatically; %d running process(es) were launched "
                 "some other way." % total)

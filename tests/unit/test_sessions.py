@@ -17,7 +17,10 @@ def row(pid, ppid, exe="", cmdline="", mem=0, started=1):
 
 class TestTemplates(unittest.TestCase):
     def test_four_templates(self):
-        ids = [t.id for t in agents.all_templates()]
+        # The DEFAULT registry. `all_templates()` reflects runtime overrides
+        # (`[[agents]]`), which other tests mutate, so asserting on it made this
+        # test order-dependent.
+        ids = [t.id for t in agents.DEFAULT_TEMPLATES]
         self.assertEqual(ids, ["claude", "codex", "projv", "pwsh"])
 
     def test_match_by_exe(self):

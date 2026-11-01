@@ -117,16 +117,23 @@ class TestWelcome(WindowCase):
 
 class TestReceipts(WindowCase):
     def test_copy_from_the_tree_names_the_target_pane(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            target = os.path.join(tmp, "main.cpp")
-            open(target, "w").close()
+        # Not TemporaryDirectory: a pane's child holds its cwd open, and Windows
+        # then refuses the cleanup. A stable temp dir deleted with ignore_errors.
+        import shutil
+        tmp = os.path.join(tempfile.gettempdir(), "ostlr-copy-target")
+        os.makedirs(tmp, exist_ok=True)
+        target = os.path.join(tmp, "main.cpp")
+        open(target, "w").close()
+        try:
             pane = self.window.new_terminal(cwd=tmp, title="t")
             self.assertIsNotNone(pane)
             self.window._receipt_copy(target, from_tree=True)
+            self.assertIn("copied", self.window.receipt)
+            self.assertIn("Pane", self.window.receipt)
+            self.assertIn("same project", self.window.receipt)
             pane.bridge.stop()
-        self.assertIn("copied", self.window.receipt)
-        self.assertIn("Pane", self.window.receipt)
-        self.assertIn("same project", self.window.receipt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_copy_without_a_pane_still_copies_and_says_so(self):
         self.window._receipt_copy(r"D:\ws\x\y.txt")

@@ -302,7 +302,10 @@ class MainWindow(QMainWindow):
             return
         reporting = sum(1 for row in rows
                         if str(row.get("source")) in ("l1", "l2", "ostlr-pane"))
-        self.banner_label.setText(view_model.unknown_banner(len(rows), len(rows), reporting))
+        unknown = sum(1 for row in rows if str(row.get("state")) == "unknown")
+        # `unknown == total` is the only case the banner speaks about: it exists
+        # for "nothing is reporting", not for a panel that is simply quiet.
+        self.banner_label.setText(view_model.unknown_banner(len(rows), unknown, reporting))
 
     def _render_detail(self) -> None:
         self.detail.setText("\n".join(view_model.detail_lines(self._selected_row())))
@@ -388,8 +391,16 @@ class MainWindow(QMainWindow):
 
     # --- sessions: start / kill -------------------------------------------
     def start_session(self, directory=None) -> None:
+        """Open the selector; it is the only way in (baseline 3.3).
+
+        The dialog's `chosen` is the whole contract: a Cancel leaves it None, so
+        this never depends on an enum name on the instance (PySide6 exposes
+        `Accepted` on the class, not on the object - the reason for the
+        AttributeError this replaces).
+        """
         dialog = launcher_mod.Launcher(self.cfg, directory, self)
-        if dialog.exec() != dialog.Accepted or not dialog.chosen:
+        dialog.exec()
+        if not dialog.chosen:
             return
         self.start_from(dict(dialog.chosen), dialog.directory, dialog.location)
 
@@ -441,7 +452,8 @@ class MainWindow(QMainWindow):
             self, "End session",
             "End %s (pid %d)?\n\nIts whole process tree is terminated; the tree holds "
             "about %s right now." % (row.get("agent") or "?", pid, mem))
-        if answer != QMessageBox.Yes:
+        from PySide6.QtWidgets import QMessageBox as _Box
+        if answer != _Box.StandardButton.Yes:
             return
         result = actions_mod.kill({"pid": pid, "started_at": row.get("started_at"),
                                    "cwd": row.get("cwd")})
