@@ -25,9 +25,9 @@ class TestFontContract(unittest.TestCase):
             self.assertNotIn(banned, family.split("monospace")[0], family)
 
     def test_a_cjk_face_is_in_the_stack(self):
+        # Chinese must be drawn by a bundled CJK face, not a random system fallback.
         family = fonts.family_for(config.Config(), EMPTY_DIR)
-        self.assertTrue(any(name in family for name in
-                            ("SimHei", "NSimSun", "SimSun", "Microsoft YaHei")), family)
+        self.assertIn("LXGW WenKai Mono", family)
 
     def test_a_configured_family_wins_over_the_default(self):
         cfg = config.Config()
