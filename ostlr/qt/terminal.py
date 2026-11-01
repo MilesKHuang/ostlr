@@ -29,6 +29,8 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from . import conpty
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TERM_HTML = os.path.join(HERE, "term.html")
 
@@ -79,50 +81,44 @@ class PtyBridge(QThread):
         self._stop = False
     # --- lifecycle ---------------------------------------------------
     def run(self) -> None:  # noqa: D401 - QThread entry point
-        try:
-            from winpty import PtyProcess
-        except Exception as exc:  # pragma: no cover - packaging failure
-            self.failed.emit("pywinpty is not available: %s" % exc)
+        """Read the PTY and emit what arrives.
+
+        The bytes come straight from the pseudo console: no socket hop and no
+        1 ms-per-chunk pump, which is what capped the old layer's throughput
+        (pywinpty's reader thread sleeps between reads and reassembles UTF-8 one
+        byte at a time).
+        """
+        pty = None
+        if conpty.available():
+            try:
+                pty = conpty.ConPty(self._argv, cwd=self._cwd,
+                                    cols=self._cols, rows=self._rows)
+                pty.start()
+            except Exception as exc:
+                self.failed.emit("conpty: %s" % exc)
+                pty = None
+        if pty is None:
+            self.failed.emit("no pseudo console available")
             return
 
-        command = " ".join(self._argv)
-        previous = None
-        try:
-            if self._cwd:
-                previous = os.getcwd()
-                os.chdir(self._cwd)
-            self._process = PtyProcess.spawn(command, dimensions=(self._rows, self._cols))
-        except Exception as exc:
-            self.failed.emit(str(exc))
-            return
-        finally:
-            if previous:
-                try:
-                    os.chdir(previous)
-                except OSError:
-                    pass
-
-        # The pane owns this pid from now on: it is the session the list shows,
-        # and the status record the ladder reads. This is the whole reason for
-        # owning a PTY instead of watching someone else's console.
-        self.started.emit(int(getattr(self._process, "pid", 0) or 0))
-
+        self._process = pty
+        self.started.emit(int(pty.pid))
         last_report = 0.0
         while not self._stop:
-            try:
-                chunk = self._process.read(8192)
-            except EOFError:
-                break
-            except Exception as exc:  # a dying child is a message, not a crash
-                self.failed.emit(str(exc))
+            chunk = pty.read(0.05)
+            if chunk is None:
                 break
             if chunk:
-                self.data.emit(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
+                self.data.emit(chunk)
                 now = time.time()
                 if now - last_report > 5.0:
                     last_report = now
                     self.heartbeat.emit()
+        code = pty.wait_exit(500) if not self._stop else None
+        if code is not None:
+            self.exit_code = code
         self.failed.emit("process exited")
+
 
     # --- input -------------------------------------------------------
     def write(self, text: str) -> None:
@@ -134,13 +130,14 @@ class PtyBridge(QThread):
             pass
 
     def resize(self, cols: int, rows: int) -> None:
+        """ResizePseudoConsole: the child sees this size on its next query."""
         if cols <= 0 or rows <= 0:
             return
         self._cols, self._rows = cols, rows
         if self._process is None:
             return
         try:
-            self._process.setwinsize(rows, cols)
+            self._process.resize(cols, rows)
         except Exception:
             pass
 
@@ -149,7 +146,7 @@ class PtyBridge(QThread):
         process, self._process = self._process, None
         if process is not None:
             try:
-                process.terminate(force=True)
+                process.terminate()
             except Exception:
                 pass
 

@@ -77,9 +77,19 @@
     const cols = Math.max(20, Math.floor((width - 8) / cell.w));
     const rows = Math.max(5, Math.floor((height - 6) / cell.h));
     if (cols !== term.cols || rows !== term.rows) {
+      const alternate = term.buffer.active.type === 'alternate';
       term.resize(cols, rows);
+      // A terminal owns its display, and conhost clears the screen when the
+      // window changes size. xterm keeps the old cells, so a TUI that repaints
+      // only what it thinks changed leaves its previous frame's borders behind -
+      // the stray box characters the user photographed. Clearing is safe on the
+      // alternate screen (full-screen apps repaint it anyway) and deliberately
+      // NOT done on the normal screen, where it would eat shell history.
+      if (alternate) {
+        term.write('\x1b[2J');
+      }
     }
-    send({ r: [term.cols, term.rows] });
+    send({ r: [term.cols, term.rows], alt: term.buffer.active.type === 'alternate' });
   }
 
   window.writeB64 = function (b64) {
