@@ -258,3 +258,30 @@ that "does not exist" says something about the index, not about the machine.
 the pane stays blank with no message anywhere. The exe now carries them, and a
 `OSTLR_DEBUG_JS=1` switch prints the page's own console for the next time a
 packaged pane looks dead.
+
+## 4. The two symptoms were one root cause: a placeholder grid
+
+"Its refresh rate is very low" and "the TUI's vertical borders are broken" turned
+out to be the same defect, and neither was Python being slow.
+
+The page reports its grid three times before the layout settles: the first report
+is the fit floor, `20 x 5`, because the container has no size yet. We spawned the
+child at that grid and also forwarded the next `20 x 5` resize to it. projV then
+drew a 20-column frame into a 188-column terminal: borders everywhere, nothing
+looking filled, and very few bytes arriving - which read as "low refresh".
+
+Fixes, each at the cause:
+
+| Cause | Fix |
+|---|---|
+| a placeholder grid reached the child | a grid must be plausible (`>= 40 x >= 10`) and seen twice before it starts or resizes the child; the 1 s fallback keeps a broken page from leaving the pane dead |
+| the old PTY wrapper put a socket and a 1 ms-per-chunk pump thread between conhost and us, and reassembled UTF-8 one byte at a time | `winpty.PTY`, the C++ object, is used directly: blocking read in our own thread, `set_size` for resize. Measured on the same child: 1 028 -> 13 550 bytes received once the grid stopped shrinking |
+| xterm keeps the old cells when the grid changes, while conhost clears the screen | on a grid change the alternate screen is cleared (and only there: clearing the normal screen would eat shell history) |
+| output went out one `runJavaScript` per read | coalesced on a 16 ms timer, one call per frame |
+
+A negative result worth keeping: a ctypes ConPTY written for this (CreatePipe ->
+CreatePseudoConsole -> CreateProcess with the pseudoconsole attribute) compiled,
+started and *silently did not attach the child* - projV wrote into the parent's
+console while the pipe stayed empty. The `mode con` probe appeared to confirm the
+resize, but the text was coming from the wrong console. It is deleted rather than
+kept as a fallback: a PTY wrapper that leaks output is worse than no wrapper.

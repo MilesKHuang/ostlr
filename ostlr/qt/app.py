@@ -191,8 +191,8 @@ class MainWindow(QMainWindow):
         window and the terminal on a grid the user could not see.
         """
         width = int(width or self.width() or 1200)
-        left = max(300, int(width * 0.20))
-        dock = max(320, int(width * 0.22))
+        left = max(340, int(width * 0.26))
+        dock = max(320, int(width * 0.20))
         terminal = max(320, width - left - dock)
         self.body.setSizes([left, terminal, dock])
 

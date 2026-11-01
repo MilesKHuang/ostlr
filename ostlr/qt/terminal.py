@@ -29,8 +29,6 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from . import conpty
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 TERM_HTML = os.path.join(HERE, "term.html")
 
@@ -83,40 +81,50 @@ class PtyBridge(QThread):
     def run(self) -> None:  # noqa: D401 - QThread entry point
         """Read the PTY and emit what arrives.
 
-        The bytes come straight from the pseudo console: no socket hop and no
-        1 ms-per-chunk pump, which is what capped the old layer's throughput
-        (pywinpty's reader thread sleeps between reads and reassembles UTF-8 one
-        byte at a time).
+        This uses `winpty.PTY`, the C++ object, not `PtyProcess`: the wrapper puts
+        a socket and a pump thread (which sleeps 1 ms per chunk and reassembles
+        UTF-8 one byte at a time) between the pseudo console and us, and that hop
+        is what capped throughput. PTY gives the same console with nothing in
+        between, and `set_size` is the resize the child actually observes.
         """
-        pty = None
-        if conpty.available():
-            try:
-                pty = conpty.ConPty(self._argv, cwd=self._cwd,
-                                    cols=self._cols, rows=self._rows)
-                pty.start()
-            except Exception as exc:
-                self.failed.emit("conpty: %s" % exc)
-                pty = None
-        if pty is None:
-            self.failed.emit("no pseudo console available")
+        try:
+            from winpty import PTY
+        except Exception as exc:  # pragma: no cover - packaging failure
+            self.failed.emit("winpty is not available: %s" % exc)
+            return
+
+        try:
+            pty = PTY(self._cols, self._rows)
+            pty.spawn(self._argv[0],
+                      cmdline=" ".join(self._argv) if len(self._argv) > 1 else None,
+                      cwd=self._cwd)
+        except Exception as exc:
+            self.failed.emit(str(exc))
             return
 
         self._process = pty
         self.started.emit(int(pty.pid))
         last_report = 0.0
         while not self._stop:
-            chunk = pty.read(0.05)
-            if chunk is None:
+            try:
+                chunk = pty.read(blocking=True)
+            except Exception:
                 break
-            if chunk:
-                self.data.emit(chunk)
-                now = time.time()
-                if now - last_report > 5.0:
-                    last_report = now
-                    self.heartbeat.emit()
-        code = pty.wait_exit(500) if not self._stop else None
-        if code is not None:
-            self.exit_code = code
+            if not chunk:
+                if pty.iseof() or not pty.isalive():
+                    break
+                continue
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", "replace")
+            self.data.emit(chunk)
+            now = time.time()
+            if now - last_report > 5.0:
+                last_report = now
+                self.heartbeat.emit()
+        try:
+            self.exit_code = pty.get_exitstatus()
+        except Exception:
+            self.exit_code = None
         self.failed.emit("process exited")
 
 
@@ -130,14 +138,14 @@ class PtyBridge(QThread):
             pass
 
     def resize(self, cols: int, rows: int) -> None:
-        """ResizePseudoConsole: the child sees this size on its next query."""
+        """ResizePseudoConsole under the hood: the child sees this size."""
         if cols <= 0 or rows <= 0:
             return
         self._cols, self._rows = cols, rows
         if self._process is None:
             return
         try:
-            self._process.resize(cols, rows)
+            self._process.set_size(int(cols), int(rows))
         except Exception:
             pass
 
@@ -146,7 +154,11 @@ class PtyBridge(QThread):
         process, self._process = self._process, None
         if process is not None:
             try:
-                process.terminate()
+                process.cancel_io()   # unblocks the reader thread
+            except Exception:
+                pass
+            try:
+                process.terminate(force=True)
             except Exception:
                 pass
 
@@ -213,6 +225,7 @@ class TerminalPane(QWidget):
         self._buffer = bytearray()
         self._started = False
         self._flush_timer = None
+        self._last_grid = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -228,16 +241,28 @@ class TerminalPane(QWidget):
 
     # --- pty lifecycle: born at the right size ---------------------------
     def _start_pty(self, cols: int, rows: int) -> None:
-        """Spawn the child once the page knows its grid.
+        """Spawn the child at the grid the pane actually has.
 
-        This is the fix for the half-repainted frame: the child used to start at
-        100x30 and get resized afterwards, and a TUI that redraws only changed
-        cells leaves the old borders on screen.
+        The page can report a placeholder grid before the layout settles (20x5 was
+        observed), and spawning there leaves a TUI drawing for a size it never
+        sees again - the stray borders. So a grid must be plausible AND seen twice
+        before it is trusted; the 1 s fallback spawns with the last seen size so a
+        broken web view still gets a terminal.
         """
         if self._started or not self._ready:
             return
+        cols, rows = int(cols), int(rows)
+        if not self._plausible(cols, rows):
+            self._last_grid = (cols, rows)
+            return
+        if self._last_grid != (cols, rows) and self._last_grid is not None:
+            # Changed since the last report: wait for the next one to settle.
+            self._last_grid = (cols, rows)
+            QTimer.singleShot(120, lambda: self._start_pty(*self._last_grid))
+            return
+        self._last_grid = (cols, rows)
         self._started = True
-        self.bridge = PtyBridge(self.argv, cwd=self.cwd, cols=int(cols), rows=int(rows))
+        self.bridge = PtyBridge(self.argv, cwd=self.cwd, cols=cols, rows=rows)
         self.bridge.data.connect(self._on_data)
         self.bridge.failed.connect(self._on_failed)
         self.bridge.started.connect(self._on_started)
@@ -246,6 +271,11 @@ class TerminalPane(QWidget):
         self._flush_timer = QTimer(self)
         self._flush_timer.timeout.connect(self._flush)
         self._flush_timer.start(16)   # 60 Hz: batching, not one IPC per chunk
+
+    @staticmethod
+    def _plausible(cols: int, rows: int) -> bool:
+        """A real pane is never 20x5: that is the fit floor, not a window."""
+        return cols >= 40 and rows >= 10
 
     def _flush(self) -> None:
         """Push whatever accumulated in the last 16 ms as one JS call.
@@ -347,7 +377,10 @@ class TerminalPane(QWidget):
                 # First grid report: the child is born with the size the user sees.
                 self._start_pty(cols, rows)
                 return
-            if self.bridge is not None:
+            # The placeholder grid the page reports before the layout settles
+            # (20x5) must never reach the child: resizing to it would shrink a
+            # running TUI to nothing.
+            if self._plausible(cols, rows) and self.bridge is not None:
                 self.bridge.resize(cols, rows)
 
     def _refit(self) -> None:
