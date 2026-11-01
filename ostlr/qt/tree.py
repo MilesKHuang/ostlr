@@ -33,6 +33,7 @@ class FileTree(QWidget):
     open_terminal = Signal(str)       # absolute directory
     inject_path = Signal(str, bool)   # absolute path, at_prefix
     copied = Signal(str)              # absolute path
+    opened = Signal(str)              # absolute path opened with the OS handler
 
     def __init__(self, root: Optional[str] = None, parent=None) -> None:
         super().__init__(parent)
@@ -69,9 +70,18 @@ class FileTree(QWidget):
 
     # --- navigation ---------------------------------------------------
     def set_root(self, path: str) -> None:
+        """Point the tree at `path`, unless it is already there.
+
+        The panel calls this on every selection change, and the row list refreshes
+        every tick; re-rooting an unchanged path would collapse whatever the user
+        had expanded, twice a second.
+        """
         if not path or not os.path.isdir(path):
             return
-        self.root = os.path.abspath(path)
+        target = os.path.abspath(path)
+        if target == getattr(self, "root", None) and self.view.rootIndex().isValid():
+            return
+        self.root = target
         self.path_edit.setText(self.root)
         self.view.setRootIndex(self.model.index(self.root))
 
@@ -82,9 +92,22 @@ class FileTree(QWidget):
         self.set_root(os.path.dirname(self.root.rstrip("\\/")) or self.root)
 
     def _on_double_click(self, index: QModelIndex) -> None:
+        """A directory re-roots the tree; a file opens in whatever the OS uses."""
         path = self.model.filePath(index)
+        if not path:
+            return
         if os.path.isdir(path):
             self.set_root(path)
+            return
+        self._open_file(path)
+
+    def _open_file(self, path: str) -> None:
+        try:
+            os.startfile(path)          # noqa: S606 - the OS association is the point
+        except (AttributeError, OSError) as exc:
+            self.opened.emit("%s failed: %s" % (path, exc))
+            return
+        self.opened.emit(path)
 
     # --- the context menu (baseline 3.3 / 3.4) ------------------------
     def selected_path(self) -> str:

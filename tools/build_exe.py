@@ -24,6 +24,14 @@ WORK = os.path.join(ROOT, "build_pyi")
 
 def main() -> int:
     onefile = "--onefile" in sys.argv
+    # A running panel holds DLLs open inside its own folder, so the build that
+    # produced it cannot be overwritten while it runs. `--dist <dir>` builds beside
+    # it; copy the folder over the old one when the panel is closed.
+    dist_dir = DIST
+    if "--dist" in sys.argv:
+        index = sys.argv.index("--dist")
+        if index + 1 < len(sys.argv):
+            dist_dir = os.path.abspath(sys.argv[index + 1])
     if not os.path.exists(ENTRY):
         print("missing entry point: %s" % ENTRY, file=sys.stderr)
         return 2
@@ -50,7 +58,7 @@ def main() -> int:
         "--onefile" if onefile else "--onedir",
         "--console",
         "--name", "ostlr",
-        "--distpath", DIST,
+        "--distpath", dist_dir,
         "--workpath", WORK,
         "--specpath", WORK,
         # Keep the package layout: terminal.py resolves term.html relative to its
@@ -72,8 +80,8 @@ def main() -> int:
     if proc.returncode != 0:
         return proc.returncode
 
-    exe = (os.path.join(DIST, "ostlr.exe") if onefile
-           else os.path.join(DIST, "ostlr", "ostlr.exe"))
+    exe = (os.path.join(dist_dir, "ostlr.exe") if onefile
+           else os.path.join(dist_dir, "ostlr", "ostlr.exe"))
     if not os.path.exists(exe):
         print("build finished but %s is missing" % exe, file=sys.stderr)
         return 1

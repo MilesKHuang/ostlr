@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .. import paths
 
-MAX_RESTORE = 4  # panes are Chromium renderers; the design caps them at four
+MAX_RESTORE = 5  # sessions restored at start-up; matches terminal.MAX_PANES
 
 
 def layout_path() -> str:

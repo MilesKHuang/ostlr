@@ -52,7 +52,10 @@ def _bundled(name: str) -> str:
 
 # One QWebEngineView is a Chromium renderer (~100 MB). The design caps panes at
 # four; beyond that the panel would cost more than the agents it watches.
-MAX_PANES = 4
+# One QWebEngineView is a Chromium renderer (~100 MB). The list is the switch now,
+# so this is the number of sessions that can be open at once: five, at the user's
+# call - a sixth would cost another renderer for a window that is already full.
+MAX_PANES = 5
 
 
 def _b64(data: bytes) -> str:

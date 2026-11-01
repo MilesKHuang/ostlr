@@ -6,11 +6,11 @@ One window for the AI agent sessions you run on this machine: what is running,
 what is **waiting for you**, and one click to focus, kill or start another - each
 in a real terminal the panel owns.
 
-![Ostlr: three panes, their CPU and memory, and a proJV TUI running inside](docs/ostlr.png)
+![Ostlr: two panes, one waiting for an approval, and the file tree under the list](docs/ostlr.png)
 
-Three proJV sessions in three directories, each with a live CPU and memory
-reading; the right dock is the file tree of the directory the selected session
-runs in; the receipt line shows an OSC 7501 report arriving from the program.
+Two sessions in two directories - one **waiting for an approval**, one working -
+each with its own CPU and memory; the file tree below the list follows whichever
+session is selected; the receipt line describes that session.
 
 Self-use tool. No cloud, no telemetry, no account.
 
@@ -26,8 +26,14 @@ Self-use tool. No cloud, no telemetry, no account.
   `blocked` and `idle` come only from the program itself over OSC 7501 (proJV
   does this) or from a producer's status file. The program's words, never ours.
   A state that arrived that way is **held** for as long as the process lives.
-- **Tabs.** Each tab is one session; the tabs, their commands and their
-  directories come back on the next start.
+- **One session per row.** The list *is* the switch: click a row and that pane
+  fills the window, its directory becomes the file tree's root, and the keyboard
+  goes to that terminal. Up to five sessions at once; `Ctrl+W`, the middle mouse
+  button, or the row's menu closes one. Commands and directories come back on the
+  next start.
+- **Files beside the sessions.** Double-click a folder to browse it, double-click
+  a file to open it in whatever the OS uses, right-click to start a TUI there or
+  send the path into the focused pane.
 - **You say what runs.** The launcher lists the programs in `config.toml`;
   *Browse...* picks an exe, and that pick is written back as a `[[agents]]` entry.
   It also states out loud which copy of the exe will run and whether that copy has

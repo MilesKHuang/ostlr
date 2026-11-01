@@ -25,10 +25,12 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QMenu, QMessageBox, QPushButton, QSplitter, QStackedWidget, QVBoxLayout,
+    QWidget,
 )
 
 from .. import actions as actions_mod
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self.pane_by_pid: Dict[int, terminal.TerminalPane] = {}
         self.stats: Dict[int, Dict[str, Optional[float]]] = {}
         self.selected_pid: Optional[int] = None
+        self._receipt_kind = ""
 
         self.tray = tray_mod.Tray(self)
         self.tray.show_requested.connect(self._show_from_tray)
@@ -68,6 +71,11 @@ class MainWindow(QMainWindow):
         self._timer.timeout.connect(self.refresh_now)
         self._timer.start(max(1, int(self.cfg.tick_s)) * 1000)
         QTimer.singleShot(150, self.refresh_now)
+
+        # Ctrl+W closes the session you are looking at. The tab's close button had
+        # no successor, and a pane with no way out is a trap.
+        close_shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
+        close_shortcut.activated.connect(self.close_current)
 
         if not self.tray.start():
             self._set_receipt("no tray (%s)" % self.tray.reason)
@@ -132,25 +140,41 @@ class MainWindow(QMainWindow):
         body = QSplitter(Qt.Horizontal, self)
         outer.addWidget(body, 1)
 
-        left = QWidget(body)
-        left.setMinimumWidth(300)
-        left_layout = QVBoxLayout(left)
+        # The left column is the switchboard: sessions on top, the file tree under
+        # them. The terminal then owns the whole right side - the file tree used to
+        # take a third of the window and repeated what the list already said.
+        left = QSplitter(Qt.Vertical, body)
+        left.setMinimumWidth(340)
+        sessions = QWidget(left)
+        left_layout = QVBoxLayout(sessions)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("Sessions (owned by this panel)", left))
-        self.list = QListWidget(left)
-        self.list.setMinimumWidth(380)
+        left_layout.addWidget(QLabel("Sessions (owned by this panel)", sessions))
+        self.list = QListWidget(sessions)
+        self.list.setMinimumWidth(320)
         self.list.setItemDelegate(rowdelegate.RowDelegate(self.list))
         self.list.setSpacing(2)
         self.list.itemSelectionChanged.connect(self._on_select)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._session_menu)
+        # Middle click closes a session: it is what a tab's middle click did, and
+        # the list is the only place a session is named now.
+        self.list.viewport().installEventFilter(self)
         left_layout.addWidget(self.list, 1)
+        left.addWidget(sessions)
+
+        self.tree = tree_mod.FileTree(self._initial_root(), left)
+        self.tree.start_here.connect(self.start_session)
+        self.tree.open_terminal.connect(self.open_terminal_here)
+        self.tree.inject_path.connect(self.inject_path_into_pane)
+        self.tree.copied.connect(lambda path: self._receipt_copy(path, from_tree=True))
+        self.tree.opened.connect(self._receipt_open)
+        left.addWidget(self.tree)
+        left.setStretchFactor(0, 3)
+        left.setStretchFactor(1, 2)
         body.addWidget(left)
 
-        self.tabs = QTabWidget(body)
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_tab)
-        body.addWidget(self.tabs)
+        # One page per session, no tab bar: the list above is the switch.
+        self.stack = QStackedWidget(body)
         self.placeholder = QLabel(
             "No terminal yet.\n\n"
             "Right-click a folder in Files -> \"Start a TUI here...\"\n"
@@ -159,22 +183,14 @@ class MainWindow(QMainWindow):
             "size and their state (OSC 7501 when the CLI reports one).", self)
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.placeholder.setWordWrap(True)
-        self.tabs.addTab(self.placeholder, "welcome")
+        self.stack.addWidget(self.placeholder)
+        body.addWidget(self.stack)
 
-        dock = QSplitter(Qt.Vertical, body)
-        dock.setMinimumWidth(320)
-        self.tree = tree_mod.FileTree(self._initial_root(), dock)
-        self.tree.start_here.connect(self.start_session)
-        self.tree.open_terminal.connect(self.open_terminal_here)
-        self.tree.inject_path.connect(self.inject_path_into_pane)
-        self.tree.copied.connect(lambda path: self._receipt_copy(path, from_tree=True))
-        dock.addWidget(self.tree)
-        body.addWidget(dock)
-
-        body.setStretchFactor(0, 0)   # session list keeps its width
+        body.setStretchFactor(0, 0)   # the switchboard keeps its width
         body.setStretchFactor(1, 1)   # the terminal takes every extra pixel
-        body.setStretchFactor(2, 0)   # the dock keeps its width
         self.body = body
+        self.left_column = left
+        self._items = {}
         return central
 
     def _apply_split_sizes(self, width: Optional[int] = None) -> None:
@@ -182,7 +198,7 @@ class MainWindow(QMainWindow):
 
         Qt keeps a splitter's absolute sizes, so they have to be recomputed
         whenever the window changes size. Using `self.width()` inside
-        `resizeEvent` reads the OLD width, which left the dock squeezed out of the
+        `resizeEvent` reads the OLD width, which left a column squeezed out of the
         window and the terminal on a grid the user could not see.
         """
         width = int(width or self.width() or 1200)
@@ -194,10 +210,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_split_width", None) == width and getattr(self, "body", None):
             return
         self._split_width = width
-        left = max(300, int(width * 0.20))
-        dock = max(260, int(width * 0.15))
-        terminal = max(320, width - left - dock)
-        self.body.setSizes([left, terminal, dock])
+        left = max(340, int(width * 0.26))
+        terminal = max(320, width - left)
+        self.body.setSizes([left, terminal])
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         size = event.size()
@@ -245,6 +260,9 @@ class MainWindow(QMainWindow):
         self.pane_by_pid[int(pid)] = pane
         self._set_receipt("%s -> pane (pid %d)" % (pane.title, pid))
         self.refresh_now()
+        # A new session becomes the current one: its pane is already visible, and
+        # the file tree follows the directory it was started in.
+        self._select_pid(int(pid))
 
     def _on_l1(self, pid: int, report) -> None:
         """A CLI told us its own state over OSC 7501: trust it above everything."""
@@ -267,8 +285,8 @@ class MainWindow(QMainWindow):
         if pane is None:
             return None
         self._drop_placeholder()
-        index = self.tabs.addTab(pane, pane.title)
-        self.tabs.setCurrentIndex(index)
+        self.stack.addWidget(pane)
+        self.stack.setCurrentWidget(pane)
         pane.focus_terminal()
         QTimer.singleShot(250, lambda p=pane: self._refit(p))
         return pane
@@ -283,9 +301,7 @@ class MainWindow(QMainWindow):
     def _drop_placeholder(self) -> None:
         if getattr(self, "placeholder", None) is None:
             return
-        index = self.tabs.indexOf(self.placeholder)
-        if index >= 0:
-            self.tabs.removeTab(index)
+        self.stack.removeWidget(self.placeholder)
         self.placeholder.deleteLater()
         self.placeholder = None
 
@@ -293,27 +309,48 @@ class MainWindow(QMainWindow):
         return self.new_terminal(
             cwd=directory, title="terminal @ %s" % os.path.basename(directory or "?"))
 
-    def close_tab(self, index: int) -> None:
-        widget = self.tabs.widget(index)
-        if widget is None:
+    def close_session(self, pane=None) -> None:
+        """Close one session: stop its PTY, drop its page, forget its row.
+
+        A tab's close button and middle click both landed here; the list row is
+        the only place a session is named now, so the row is where it closes.
+        """
+        pane = pane if isinstance(pane, terminal.TerminalPane) else self._focused_pane()
+        if pane is None:
+            self._set_receipt("no session to close")
             return
-        self.tabs.removeTab(index)
-        victims = [widget] if not isinstance(widget, QSplitter) else [
-            widget.widget(i) for i in range(widget.count())]
-        for pane in victims:
-            if not isinstance(pane, terminal.TerminalPane):
-                continue
-            if pane in self.panes:
-                self.panes.remove(pane)
-            for pid, bound in list(self.pane_by_pid.items()):
-                if bound is pane:
-                    del self.pane_by_pid[pid]
-            pane.stop()
-            pane.deleteLater()
+        title = pane.title
+        if pane in self.panes:
+            self.panes.remove(pane)
+        for pid, bound in list(self.pane_by_pid.items()):
+            if bound is pane:
+                del self.pane_by_pid[pid]
+        self.stack.removeWidget(pane)
+        pane.stop()
+        pane.deleteLater()
+        self.selected_pid = None
         if not self.panes and getattr(self, "placeholder", None) is None:
             self.placeholder = QLabel("No terminal yet.", self)
             self.placeholder.setAlignment(Qt.AlignCenter)
-            self.tabs.addTab(self.placeholder, "welcome")
+            self.stack.addWidget(self.placeholder)
+            self.stack.setCurrentWidget(self.placeholder)
+        self.refresh_now()
+        self._set_receipt("closed %s" % title)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        """Middle click on a row closes that session - the old tab gesture."""
+        if watched is self.list.viewport():
+            if event.type() == QEvent.MouseButtonRelease and \
+                    event.button() == Qt.MiddleButton:
+                item = self.list.itemAt(event.position().toPoint())
+                if item is not None:
+                    row = item.data(Qt.UserRole) or {}
+                    self.close_session(self.pane_by_pid.get(int(row.get("pid") or 0)))
+                    return True
+        return super().eventFilter(watched, event)
+
+    def close_current(self) -> None:
+        self.close_session(self._focused_pane())
 
     def _on_pane_exit(self, pane, reason: str) -> None:
         self._set_receipt("%s: %s" % (pane.title, reason))
@@ -388,24 +425,44 @@ class MainWindow(QMainWindow):
         return {"rows": self.pane_rows()}
 
     def _render(self) -> None:
+        """Refresh the rows IN PLACE.
+
+        The numbers change every tick, so a repaint is needed - but clearing the
+        list would destroy the selection, and re-selecting by pid would fire a
+        selection change, which now also switches the pane and re-roots the file
+        tree. Updating each item's data keeps the row object (and therefore the
+        selection) identical from tick to tick.
+        """
         rows = self.pane_rows()
-        keep = self.selected_pid
+        seen = set()
         self.list.blockSignals(True)
-        self.list.clear()
-        for row in rows:
-            self.list.addItem(self._row_item(row))
-        self.list.blockSignals(False)
-        if keep is not None:
-            for index in range(self.list.count()):
-                item_row = self.list.item(index).data(Qt.UserRole)
-                if int(item_row.get("pid") or 0) == keep:
-                    self.list.setCurrentRow(index)
-                    break
+        try:
+            for row in rows:
+                pid = int(row.get("pid") or 0)
+                seen.add(pid)
+                item = self._items.get(pid)
+                if item is None:
+                    item = self._row_item(row)
+                    self._items[pid] = item
+                    self.list.addItem(item)
+                else:
+                    item.setData(Qt.UserRole, row)
+                    item.setText("%s  %s  %s" % (row.get("agent"), row.get("project"),
+                                                 row.get("state")))
+            for pid in [pid for pid in self._items if pid not in seen]:
+                item = self._items.pop(pid)
+                self.list.takeItem(self.list.row(item))
+        finally:
+            self.list.blockSignals(False)
 
         blocked = sum(1 for row in rows if row["state"] == "blocked")
         working = sum(1 for row in rows if row["state"] == "working")
         self._render_banner(rows)
         self.tray.update(blocked, working)
+        # Keep the detail line in step with the row it describes, but never
+        # overwrite a message the user just caused.
+        if getattr(self, "_receipt_kind", "") in ("", "detail"):
+            self._render_detail()
 
     def _row_item(self, row: Dict[str, object]) -> QListWidgetItem:
         # The delegate paints everything; the text stays for tooltips and for
@@ -432,7 +489,7 @@ class MainWindow(QMainWindow):
         """
         row = self._selected_row()
         if not row:
-            self._set_receipt("")
+            self._set_receipt("", kind="detail")
             return
         self._set_receipt("%s  %s (%s)  dir %s  cpu %s  mem %s  gpu %s/%s"
                           % (row.get("agent"), row["state"], row.get("source"),
@@ -441,7 +498,8 @@ class MainWindow(QMainWindow):
                              procstat.format_mem(row.get("mem")),
                              procstat.format_gpu(row.get("gpu")),
                              view_model.format_mem(
-                                 (row.get("gpu_mib") or 0) * 1024 * 1024)))
+                                 (row.get("gpu_mib") or 0) * 1024 * 1024)),
+                          kind="detail")
 
     # --- selection / receipts ---------------------------------------------
     def _selected_row(self):
@@ -449,11 +507,41 @@ class MainWindow(QMainWindow):
         return item.data(Qt.UserRole) if item is not None else None
 
     def _on_select(self) -> None:
+        """Selecting a row is the switch: its pane becomes visible, the file tree
+        follows its directory, and the keyboard goes to that terminal."""
         row = self._selected_row()
         self.selected_pid = int(row.get("pid") or 0) if row else None
+        pane = self.pane_by_pid.get(self.selected_pid or 0)
+        if pane is not None:
+            if self.stack.currentWidget() is not pane:
+                self.stack.setCurrentWidget(pane)
+                QTimer.singleShot(120, lambda p=pane: self._refit(p))
+            if pane.cwd:
+                self.tree.set_root(pane.cwd)
+            pane.focus_terminal()
         self._render_detail()
 
-    def _set_receipt(self, text: str) -> None:
+    def _select_pid(self, pid: int) -> None:
+        """Make the row for `pid` current without re-entering the signal."""
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            row = item.data(Qt.UserRole) or {}
+            if int(row.get("pid") or 0) == int(pid or 0):
+                self.list.blockSignals(True)
+                self.list.setCurrentItem(item)
+                self.list.blockSignals(False)
+                self._on_select()
+                return
+
+    def _set_receipt(self, text: str, kind: str = "message") -> None:
+        """One label carries two things: the selected row, and what just happened.
+
+        `kind` is how a transient message ("closed projV", an L1 report) survives
+        the next tick: the refresh only rewrites the line when it is the detail
+        line, which is derived from the row and would otherwise go stale - the row
+        said `working` while the line still said `unknown`.
+        """
+        self._receipt_kind = kind
         self.receipt_label.setText(text)
 
     @property
@@ -461,19 +549,14 @@ class MainWindow(QMainWindow):
         return self.receipt_label.text()
 
     def _focused_pane(self):
-        widget = self.tabs.currentWidget()
+        """The pane the user is looking at: the visible page, else the last one."""
+        widget = self.stack.currentWidget()
         if isinstance(widget, terminal.TerminalPane):
             return widget
-        if isinstance(widget, QSplitter):
-            for index in range(widget.count()):
-                child = widget.widget(index)
-                if isinstance(child, terminal.TerminalPane) and child.view.hasFocus():
-                    return child
-            for index in range(widget.count()):
-                child = widget.widget(index)
-                if isinstance(child, terminal.TerminalPane):
-                    return child
         return self.panes[-1] if self.panes else None
+
+    def _receipt_open(self, path: str) -> None:
+        self._set_receipt("opened %s" % path)
 
     def _receipt_copy(self, path: str, from_tree: bool = False) -> None:
         pane = self._focused_pane()
@@ -562,6 +645,8 @@ class MainWindow(QMainWindow):
         row = self._selected_row()
         if not row:
             return
+        pid = int(row.get("pid") or 0)
+        pane = self.pane_by_pid.get(pid)
         menu = QMenu(self)
         menu.setStyleSheet(style.stylesheet())
         menu.addAction("Open a terminal in its directory",
@@ -569,6 +654,11 @@ class MainWindow(QMainWindow):
         menu.addAction("Focus its window", self.focus_selected)
         menu.addAction("Copy its directory", self.copy_selected_path)
         menu.addSeparator()
+        # Two different endings, named for what they do: closing the pane stops the
+        # terminal (the child dies with its PTY), ending the tree is the taskkill
+        # with a confirmation. The tab's close button used to be the first one.
+        close = menu.addAction("Close session", lambda: self.close_session(pane))
+        close.setEnabled(pane is not None)
         menu.addAction("End this session...", lambda: self.kill_session(row))
         menu.exec(self.list.viewport().mapToGlobal(position))
 
@@ -611,20 +701,21 @@ class MainWindow(QMainWindow):
 
     # --- layout / tray -----------------------------------------------------
     def _layout_payload(self) -> List[Dict[str, object]]:
-        """One entry per tab that holds a pane. Split panes are off for now.
+        """One entry per session, in list order.
 
-        Tabs and their command lines come back; a shape this build cannot draw
-        does not (`_restore_layout` keeps the first pane of an old split entry).
+        The storage shape is the one `layout.tab_entry` already writes (a title and
+        its panes), so an old file still restores: with no tab bar, a tab is simply
+        a session, and each entry carries exactly one pane.
         """
-        tabs: List[Dict[str, object]] = []
-        for index in range(self.tabs.count()):
-            widget = self.tabs.widget(index)
-            if not isinstance(widget, terminal.TerminalPane):
-                continue
-            tabs.append(layout_mod.tab_entry(
-                self.tabs.tabText(index),
-                [{"argv": widget.argv, "cwd": widget.cwd or ""}]))
-        return tabs
+        entries: List[Dict[str, object]] = []
+        for pane in self.panes:
+            entries.append(layout_mod.tab_entry(
+                pane.title, [{"argv": pane.argv, "cwd": pane.cwd or ""}]))
+        return entries
+
+    def _active_index(self) -> int:
+        pane = self._focused_pane()
+        return self.panes.index(pane) if pane in self.panes else 0
 
     def _restore_layout(self) -> bool:
         if not getattr(self.cfg, "restore_layout", True):
@@ -655,7 +746,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         try:
             payload = self._layout_payload()
-            layout_mod.save(payload, self.tabs.currentIndex())
+            layout_mod.save(payload, self._active_index())
             layout_mod.save_window(self.saveGeometry().toHex().decode("ascii"),
                                    self.isMaximized())
         except Exception:

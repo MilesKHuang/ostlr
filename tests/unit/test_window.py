@@ -98,12 +98,13 @@ class TestL1Wiring(WindowCase):
 
 
 class TestWelcome(WindowCase):
-    def test_the_welcome_tab_disappears_when_a_pane_opens(self):
-        before = self.window.tabs.count()
-        self.assertGreaterEqual(before, 1)
+    def test_the_welcome_page_disappears_when_a_pane_opens(self):
+        # No tab bar any more: the welcome text is a page in the stack, and the
+        # first session replaces it.
+        self.assertIsNotNone(self.window.placeholder)
         self.window.new_terminal(cwd=os.getcwd(), title="t")
-        titles = [self.window.tabs.tabText(i) for i in range(self.window.tabs.count())]
-        self.assertNotIn("welcome", titles)
+        self.assertIsNone(self.window.placeholder)
+        self.assertGreaterEqual(self.window.stack.count(), 1)
         for pane in list(self.window.panes):
             pane.stop()
 

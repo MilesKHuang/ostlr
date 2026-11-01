@@ -6,6 +6,7 @@ venv/
 
 # packaged build output (tools/build_exe.py)
 dist/
+dist-next/
 build_pyi/
 *.spec
 
