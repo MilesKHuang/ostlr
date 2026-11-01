@@ -246,11 +246,16 @@ class TerminalPane(QWidget):
         # fallback draws the frame from the font and leaves a 4 px gap per row.
         self.renderer = ""
         self._l1 = None
+        self._l1_store = None
         try:
             from ..probe import l1 as l1_mod
             self._l1 = l1_mod.Stream()
+            # One record per id, as the protocol specifies: a program may report
+            # its subagents separately, and the pane shows the most urgent.
+            self._l1_store = l1_mod.Store()
         except Exception:
             self._l1 = None
+            self._l1_store = None
         # The PTY is NOT started here: it waits for the page's first grid report,
         # so the child is born with the right size. Spawning at 100x30 and
         # resizing later left the TUI with a half-repainted frame - the stray
@@ -366,6 +371,35 @@ class TerminalPane(QWidget):
         """Seconds since the child last produced output."""
         return max(0.0, time.time() - self._last_data_at)
 
+    def _apply_l1(self, report: dict) -> None:
+        """Fold one OSC 7501 report into this pane's records and publish it.
+
+        The pane owns the PTY, so it is the terminal side of the protocol: it keeps
+        one record per `id`, shows the most urgent, and writes that as the session's
+        status with `source="l1"`. A `clear` that empties the records removes the
+        file again, so the row falls back to `unknown` instead of keeping a state
+        the program has withdrawn.
+        """
+        if self._l1_store is None:
+            self.l1_report.emit(self.session_pid, report)
+            return
+        summary = self._l1_store.apply(report)
+        self.l1_report.emit(self.session_pid, report)
+        if not self.session_pid:
+            return
+        try:
+            from .. import status as status_mod
+            if summary is None:
+                existing = status_mod.read_status(self.session_pid) or {}
+                if str(existing.get("source")) == "l1":
+                    status_mod.clear_status(self.session_pid)
+                return
+            status_mod.write_status(self.session_pid, summary.state,
+                                    kind=summary.kind, msg=summary.msg,
+                                    cwd=self.cwd or os.getcwd(), source="l1")
+        except Exception:
+            pass
+
     def _withdraw(self) -> None:
         """Delete the record this pane wrote, and only that one.
 
@@ -419,7 +453,7 @@ class TerminalPane(QWidget):
             if probe and self.bridge is not None:
                 self.bridge.write(l1_mod.PROBE)   # answer or the CLI stays silent
             for report in reports:
-                self.l1_report.emit(self.session_pid, report)
+                self._apply_l1(report)
         except Exception:
             pass
         if not self._ready:
@@ -443,8 +477,41 @@ class TerminalPane(QWidget):
         # The pane owned this session; report the ending so the list says `done`
         # instead of leaving a row that looks alive after its terminal is gone.
         if self.session_pid:
-            self._report("done", reason, exit_code=self._exit_code())
+            self._finish(reason)
         self.exited.emit(reason)
+
+    def _finish(self, reason: str) -> None:
+        """The child is gone: apply the spec's exit rule, then publish.
+
+        OSC 7501 says the terminal drops `working` and `blocked` when the program
+        exits and keeps `done`/`error`. Without this, a program that crashed while
+        reporting `working` left the row saying `working` for ever - the exact lie
+        the whole state ladder exists to prevent.
+        """
+        code = self._exit_code()
+        summary = None
+        if self._l1_store is not None:
+            self._l1_store.drop_transient()
+            summary = self._l1_store.summary()
+        if summary is not None and summary.state in ("done", "error"):
+            try:
+                from .. import status as status_mod
+                status_mod.write_status(self.session_pid, summary.state,
+                                        kind=summary.kind,
+                                        msg=summary.msg or reason,
+                                        cwd=self.cwd or os.getcwd(),
+                                        exit_code=code, source="l1")
+            except Exception:
+                pass
+            return
+        try:
+            from .. import status as status_mod
+            existing = status_mod.read_status(self.session_pid) or {}
+            if str(existing.get("source")) == "l1":
+                status_mod.clear_status(self.session_pid)
+        except Exception:
+            pass
+        self._report("done", reason, exit_code=code)
 
     def _exit_code(self):
         process = getattr(self.bridge, "_process", None)

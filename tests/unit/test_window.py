@@ -69,32 +69,53 @@ class TestStartFrom(WindowCase):
 
 
 class TestL1Wiring(WindowCase):
+    """The pane is the terminal side of OSC 7501, so the pane writes the record.
+
+    The window used to write it from `_on_l1`, which meant two writers for one
+    file; now the pane folds the report into its per-id records and publishes the
+    most urgent one, and the window only shows what arrived.
+    """
+
     def test_an_l1_report_becomes_a_status_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["OSTLR_STATUS_DIR"] = tmp
             try:
-                pid = 424242
-                self.window._on_l1(pid, {"state": "blocked", "kind": "permission",
-                                         "msg": "Approve rm -rf build?"})
+                pane = self.window.new_terminal(cwd=os.getcwd(), title="l1")
+                self.assertIsNotNone(pane)
+                pane.session_pid = 424242
+                pane._apply_l1({"state": "blocked", "id": "", "app": "projv",
+                                "kind": "permission", "title": "",
+                                "msg": "Approve rm -rf build?", "progress": None})
                 from ostlr import status
-                record = status.read_status(pid, tmp)
+                record = status.read_status(424242, tmp)
             finally:
                 os.environ.pop("OSTLR_STATUS_DIR", None)
+                for open_pane in list(self.window.panes):
+                    open_pane.stop()
         self.assertIsNotNone(record)
         self.assertEqual("blocked", record["state"])
         self.assertEqual("permission", record["kind"])
         self.assertEqual("l1", record["source"])
         self.assertEqual("Approve rm -rf build?", record["msg"])
 
-    def test_a_clear_report_does_not_erase_the_row(self):
+    def test_a_clear_report_withdraws_the_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["OSTLR_STATUS_DIR"] = tmp
             try:
-                self.window._on_l1(7, {"state": "clear"})
+                pane = self.window.new_terminal(cwd=os.getcwd(), title="l1")
+                self.assertIsNotNone(pane)
+                pane.session_pid = 7
+                pane._apply_l1({"state": "working", "id": "", "app": "projv",
+                                "kind": "", "title": "", "msg": "",
+                                "progress": None})
+                pane._apply_l1({"state": "clear", "id": "", "app": "", "kind": "",
+                                "title": "", "msg": "", "progress": None})
                 from ostlr import status
                 self.assertIsNone(status.read_status(7, tmp))
             finally:
                 os.environ.pop("OSTLR_STATUS_DIR", None)
+                for open_pane in list(self.window.panes):
+                    open_pane.stop()
 
 
 class TestWelcome(WindowCase):

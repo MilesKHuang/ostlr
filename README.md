@@ -90,7 +90,7 @@ py -3 tools\build_exe.py --onefile     # one file, unpacks Chromium per start
 
 | Level | Source | Status |
 |---|---|---|
-| **L1** | OSC 7501 over the PTY we own | **live**: the pane answers a probe and parses reports; proJV emits them (`L1: done: turn finished`) |
+| **L1** | OSC 7501, the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (rev 0.3) | **live**: the pane answers the probe, keeps one record per `id`, shows the most urgent, and applies the spec's exit rule; proJV, Claude Code 2.1.295+, Pi, Crush and opencode emit it |
 | **L2** | a JSON status file per pid | works, and the only source that can say `blocked` from outside a pane |
 | **none** | nothing reported | the row says `unknown` with the reason, never `idle` |
 

@@ -97,12 +97,14 @@ class TestL1Stub(unittest.TestCase):
         # It used to blame pywinpty; the pane owns a ConPTY now.
         self.assertNotIn("pywinpty", result["reason"])
 
-    def test_combine_without_a_report_is_unknown_not_a_guess(self):
+    def test_an_empty_store_is_no_record_not_a_guess(self):
+        # `combine()` went with the ladder: the pane keeps the records itself, and
+        # "no record" is the only thing an empty store can mean.
         from ostlr.probe import l1
 
-        result = l1.combine(None, "claude - thinking", True, 0, None)
-        self.assertEqual(result["state"], "unknown")
-        self.assertEqual("none", result["source"])
+        store = l1.Store()
+        self.assertIsNone(store.summary())
+        self.assertEqual(0, store.count())
 
     def test_selftest_line_is_a_pass(self):
         from ostlr.probe import l1

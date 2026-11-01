@@ -265,18 +265,13 @@ class MainWindow(QMainWindow):
         self._select_pid(int(pid))
 
     def _on_l1(self, pid: int, report) -> None:
-        """A CLI told us its own state over OSC 7501: trust it above everything."""
+        """A CLI told us its own state over OSC 7501: show it, do not re-write it.
+
+        The pane is the terminal side of the protocol and owns the records
+        (`terminal._apply_l1`); the window only reports what arrived.
+        """
         state = str((report or {}).get("state") or "")
-        if not pid or not state or state == "clear":
-            return
-        try:
-            from .. import status as status_mod
-            pane = self.pane_by_pid.get(pid)
-            status_mod.write_status(
-                pid, state, kind=str(report.get("kind") or ""),
-                msg=str(report.get("msg") or ""),
-                cwd=getattr(pane, "cwd", "") or "", source="l1")
-        except Exception:
+        if not pid or not state:
             return
         self._set_receipt("L1 %s: %s" % (state, str(report.get("msg") or "")[:60]))
 
