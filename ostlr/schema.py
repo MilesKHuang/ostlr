@@ -202,3 +202,16 @@ def is_valid_kind(kind: Any) -> bool:
 # so `status.run()` can hand the launched agent a clean PYTHONPATH. It lives here
 # because both sides of a launch read it.
 WRAPPER_ROOT_ENV = "OSTLR_WRAPPER_ROOT"
+
+# The third-party packages this project is allowed to import. Install them from a
+# mirror (`py -3 -m pip install -i <mirror> PySide6 pywinpty ...`); `--selftest`
+# fails on any import outside stdlib + this list, so a stray dependency cannot
+# sneak in unnoticed.
+ALLOWED_THIRD_PARTY = (
+    "PySide6",   # the Qt shell + QtWebEngine (xterm.js host)
+    "shiboken6",  # PySide6's binding runtime
+    "winpty",    # ConPTY wrapper: we own the PTY
+    "psutil",    # optional: process facts
+    "PIL",       # optional: tray icon image (pystray)
+    "pystray",   # optional: system tray
+)

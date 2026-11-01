@@ -43,18 +43,34 @@ def top_level_imports(path):
     return out
 
 
-class TestStdlibOnly(unittest.TestCase):
+class TestDeclaredDependencies(unittest.TestCase):
+    """Imports are stdlib, ours, or one of the DECLARED third-party packages.
+
+    The project was stdlib-only until the terminal pane landed; the check is not
+    "no dependencies", it is "no UNDECLARED dependencies", so a stray import
+    still fails while PySide6 and winpty are allowed and listed.
+    """
+
     def test_package_has_modules(self):
         self.assertGreater(len(python_files()), 5)
 
-    def test_no_third_party_imports(self):
+    def test_no_undeclared_imports(self):
+        from ostlr import schema
+        allowed = set(schema.ALLOWED_THIRD_PARTY)
         offenders = []
         for path in python_files():
             for name in top_level_imports(path):
-                if name in STDLIB or name == "ostlr":
+                if name in STDLIB or name == "ostlr" or name in allowed:
                     continue
                 offenders.append("%s: %s" % (path.relative_to(ROOT), name))
-        self.assertEqual(offenders, [], "non-stdlib imports: %s" % offenders)
+        self.assertEqual(offenders, [], "undeclared imports: %s" % offenders)
+
+    def test_the_declared_list_is_not_empty(self):
+        # A guard: an empty allow-list would make the test above pass by accident
+        # only for stdlib-only code, and would hide a real third-party import.
+        from ostlr import schema
+        self.assertIn("PySide6", schema.ALLOWED_THIRD_PARTY)
+        self.assertIn("winpty", schema.ALLOWED_THIRD_PARTY)
 
     def test_known_stdlib_modules_are_recognised(self):
         # A guard on the guard: if sys.stdlib_module_names were empty on some

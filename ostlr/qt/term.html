@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>terminal</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #101216; overflow: hidden; }
+  #terminal { position: absolute; inset: 0; padding: 6px 4px 4px 8px; }
+  /* The xterm viewport scrollbar, kept thin so it does not eat cells. */
+  .xterm-viewport::-webkit-scrollbar { width: 10px; }
+  .xterm-viewport::-webkit-scrollbar-thumb { background: #2a2f38; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="vendor/xterm.js"></script>
+<script>
+  const term = new Terminal({
+    fontFamily: 'Consolas, "Cascadia Mono", "Microsoft YaHei Mono", monospace',
+    fontSize: 14,
+    lineHeight: 1.15,
+    cursorBlink: true,
+    allowProposedApi: true,
+    theme: {
+      background: '#101216', foreground: '#e6e6e6', cursor: '#7cc4ff',
+      selectionBackground: '#2a3a4a',
+      black: '#1a1d22', red: '#f06a6a', green: '#7ec97e', yellow: '#e2c07c',
+      blue: '#6aa9f0', magenta: '#c88ae0', cyan: '#6fd0d0', white: '#d8d8d8',
+      brightBlack: '#5a6068', brightRed: '#ff8a8a', brightGreen: '#a0e0a0',
+      brightYellow: '#f0d89a', brightBlue: '#8ac0ff', brightMagenta: '#e0a8f0',
+      brightCyan: '#9ae8e8', brightWhite: '#ffffff'
+    },
+    scrollback: 5000,
+    convertEol: false,
+  });
+  term.open(document.getElementById('terminal'));
+
+  // Bytes arrive base64-encoded: no quoting can ever corrupt them, and UTF-8 is
+  // decoded in the browser where the text is actually rendered.
+  window.writeB64 = function (b64) {
+    const raw = atob(b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    term.write(new TextDecoder('utf-8', { fatal: false }).decode(bytes));
+  };
+
+  window.setStatus = function (text) {
+    if (text) term.write('\r\n\x1b[90m[' + text + ']\x1b[0m\r\n');
+  };
+
+  window.measure = function () {
+    return { cols: term.cols, rows: term.rows };
+  };
+
+  function send(obj) {
+    // The Python side reads these from the JavaScript console: one channel, no
+    // extra dependency, and it survives any URL/quoting rules.
+    console.log('OSTLR:' + btoa(unescape(encodeURIComponent(JSON.stringify(obj)))));
+  }
+
+  term.onData(function (data) { send({ k: data }); });
+  term.onResize(function (size) { send({ r: [size.cols, size.rows] }); });
+
+  // Report the first size once the layout has settled.
+  setTimeout(function () { send({ r: [term.cols, term.rows] }); }, 60);
+  window.termReady = true;
+</script>
+</body>
+</html>

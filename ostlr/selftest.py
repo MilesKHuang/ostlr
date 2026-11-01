@@ -165,13 +165,23 @@ def check_l1() -> List[str]:
 
 
 def check_imports() -> List[str]:
-    """No third-party import anywhere under ostlr/."""
+    """Every import is either stdlib or one of the DECLARED dependencies.
+
+    The project was stdlib-only until the PTY + terminal pane landed. It is not
+    any more, and pretending otherwise would be worse than listing the three
+    packages we actually need: a typo'd import of something else must still fail
+    this check, or `--selftest` stops meaning anything.
+    """
     import ast
     import os
 
+    from . import schema
+
     root = os.path.dirname(os.path.abspath(__file__))
     stdlib = set(sys.stdlib_module_names)
+    allowed = set(schema.ALLOWED_THIRD_PARTY)
     offenders: List[str] = []
+    used: set = set()
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             if not name.endswith(".py"):
@@ -183,20 +193,25 @@ def check_imports() -> List[str]:
             except (OSError, SyntaxError):
                 continue
             for node in ast.walk(tree):
+                tops: List[str] = []
                 if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        top = alias.name.split(".")[0]
-                        if top not in stdlib and top != "ostlr":
-                            offenders.append("%s: %s" % (name, top))
+                    tops = [alias.name.split(".")[0] for alias in node.names]
                 elif isinstance(node, ast.ImportFrom):
                     if node.level:  # a relative import is ours
                         continue
-                    top = (node.module or "").split(".")[0]
-                    if top and top not in stdlib and top != "ostlr":
-                        offenders.append("%s: %s" % (name, top))
+                    tops = [(node.module or "").split(".")[0]]
+                for top in tops:
+                    if not top or top == "ostlr":
+                        continue
+                    if top in stdlib:
+                        continue
+                    if top in allowed:
+                        used.add(top)
+                        continue
+                    offenders.append("%s: %s" % (name, top))
     if offenders:
         return [_line(FAIL, "imports", ", ".join(sorted(set(offenders))))]
-    return [_line(PASS, "imports", "0 non-stdlib imports")]
+    return [_line(PASS, "imports", "deps: %s" % ", ".join(sorted(used or allowed)))]
 
 
 def run(clipboard: bool = False, clipboard_backend: Any = None) -> int:

@@ -22,8 +22,6 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import ladder, schema
-from .ui import rows as ui_rows
-from .ui import theme
 # mirrors config.py (dev_1 owns the constant; hardcoded here on purpose)
 CLIP_CHARS = schema.CLIP_CHARS
 LIST_CAP = schema.LIST_CAP
@@ -140,11 +138,19 @@ def role_for(row: Dict[str, Any]) -> str:
     role; an inferred row takes the dim variant of its role. The JSON `state`
     is never rewritten by this function.
     """
-    return theme.role_for_state(
-        row.get("state"),
-        row.get("exit_code"),
-        inferred=row.get("source") == "l3",
-    )
+    state = str(row.get("state") or "unknown").strip().lower()
+    exit_code = row.get("exit_code")
+    if state == "done" and exit_code is not None and _as_int(exit_code, 0) != 0:
+        return "danger"
+    if state == "blocked":
+        return "warn"
+    if state == "error":
+        return "danger"
+    if state == "done":
+        return "ok"
+    if state == "working":
+        return "fg" if row.get("source") != "l3" else "fg_dim"
+    return "fg_dim"
 
 
 def state_word(row: Dict[str, Any]) -> str:
@@ -395,11 +401,29 @@ def build_snapshot(sessions: Sequence[Dict[str, Any]],
     ordered = order(built)
     header = header_for(ordered)
 
-    rendered, truncated = ui_rows.apply_cap(ordered, list_cap)
+    rendered, truncated = apply_cap(ordered, list_cap)
     envelope = schema.envelope(header, rendered)
-    envelope["footer"] = ui_rows.footer_text(len(rendered), truncated)
+    envelope["footer"] = footer_text(len(rendered), truncated)
     envelope["truncated"] = truncated
     return envelope
+
+
+def apply_cap(rows: Sequence[Dict[str, Any]], cap: int) -> Tuple[List[Dict[str, Any]], int]:
+    """The visible rows and how many were cut. A cap of 0 means "no cap"."""
+    if cap and cap > 0 and len(rows) > cap:
+        return list(rows[:cap]), len(rows) - cap
+    return list(rows), 0
+
+
+def footer_text(shown: int, truncated: int) -> str:
+    """`showing 60 of 75`, or empty when nothing was cut.
+
+    The header counts the whole snapshot, so the footer is the only place that
+    says the list is a subset - without it the panel contradicts itself.
+    """
+    if truncated <= 0:
+        return ""
+    return "showing %d of %d" % (shown, shown + truncated)
 
 
 def summarise(envelope: Dict[str, Any]) -> Dict[str, Any]:

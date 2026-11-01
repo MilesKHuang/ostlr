@@ -1,4 +1,4 @@
-"""T9a/T9b - the view model: rows, buckets, ordering, formatting.
+﻿"""T9a/T9b - the view model: rows, buckets, ordering, formatting.
 
 Everything here is pure and `now` is a parameter, so the 3 s highlight and the
 600 s retention are proven without sleeping.
@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 
 from ostlr import schema, view_model as vm
-from ostlr.ui import theme
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE.parent / "fixtures"
@@ -94,7 +93,7 @@ class TestRoles(unittest.TestCase):
                            now=1000)
         self.assertEqual(row["state"], "done")          # JSON state unchanged
         self.assertEqual(vm.role_for(row), "danger")
-        self.assertEqual(theme.role_for_state("done", 1), "danger")
+        self.assertEqual(vm.role_for({"state": "done", "exit_code": 1}), "danger")
 
     def test_done_with_zero_exit_is_ok(self):
         row = vm.build_row(session(1), state_row(1, state="done", exit_code=0),

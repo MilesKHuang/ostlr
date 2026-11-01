@@ -257,9 +257,18 @@ def cmd_run(argv: Sequence[str]) -> int:
     return status_mod.run(argv)
 
 
+def _qt_available() -> bool:
+    """Is the Qt stack importable? Package lookup only, no window is opened."""
+    try:
+        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def cmd_panel(cfg: config_mod.Config,
               panel_runner: Optional[Callable[[config_mod.Config], int]] = None) -> int:
-    """Open the Tk panel and block on its mainloop.
+    """Open the Qt panel and block on its event loop.
 
     `panel_runner` is the injection point a test uses: it receives the config and
     returns an exit code, so the wiring can be asserted without a window. The
@@ -273,13 +282,13 @@ def cmd_panel(cfg: config_mod.Config,
         print("[ostlr] %s=1: not opening the panel" % ENV_NO_PANEL, file=sys.stderr)
         return EXIT_NOT_BUILT
 
-    from .ui import app as app_mod
+    from .qt import run_panel as qt_run_panel
 
-    ok, reason = app_mod.tk_available()
-    if not ok:
-        print("[ostlr] no display: %s" % reason, file=sys.stderr)
+    if not _qt_available():
+        print("[ostlr] Qt (PySide6) is not available; install it from the mirror",
+              file=sys.stderr)
         return EXIT_NOT_BUILT
-    return app_mod.run_panel(cfg)
+    return qt_run_panel(cfg)
 
 
 # --- argparse -------------------------------------------------------------
