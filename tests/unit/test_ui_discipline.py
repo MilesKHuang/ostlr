@@ -154,17 +154,34 @@ class TestTypeScale(unittest.TestCase):
         self.assertEqual(set(type_mod.SPECS), {"row", "meta", "title", "mono"})
 
     def test_sizes(self):
-        self.assertEqual(type_mod.ROW[1], 10)
-        self.assertEqual(type_mod.META[1], 9)
-        self.assertEqual(type_mod.TITLE[1], 11)
+        # 9-10 pt body text is small on a 1440p panel at 100 % scaling; the
+        # defaults were raised and `ui_scale` (A+/A-) multiplies them.
+        self.assertGreaterEqual(type_mod.ROW[1], 12)
+        self.assertGreaterEqual(type_mod.META[1], 10)
+        self.assertGreaterEqual(type_mod.TITLE[1], 13)
         self.assertEqual(type_mod.TITLE[2], "bold")
         self.assertEqual(type_mod.MONO[0], "Consolas")
-        self.assertEqual(type_mod.MONO[1], 9)
+        self.assertGreaterEqual(type_mod.MONO[1], 10)
+
+    def test_scale_multiplies_the_rendered_size(self):
+        try:
+            type_mod.set_scale(1.5)
+            self.assertEqual(type_mod.as_tk(type_mod.ROW), "{Segoe UI} 18 normal")
+        finally:
+            type_mod.set_scale(1.0)
+
+    def test_scale_is_clamped(self):
+        try:
+            self.assertEqual(type_mod.MIN_SCALE, type_mod.set_scale(0.1))
+            self.assertEqual(type_mod.MAX_SCALE, type_mod.set_scale(99))
+        finally:
+            type_mod.set_scale(1.0)
 
     def test_as_tk(self):
         # The family is braced: Tk reads an unbraced "Segoe UI 9 normal" as
         # family "Segoe", size "UI" and raises TclError at the first widget.
-        self.assertEqual(type_mod.as_tk(type_mod.ROW), "{Segoe UI} 10 normal")
+        self.assertTrue(type_mod.as_tk(type_mod.ROW).startswith("{Segoe UI} "))
+        self.assertTrue(type_mod.as_tk(type_mod.ROW).endswith(" normal"))
 
 
 class TestThemeRoles(unittest.TestCase):

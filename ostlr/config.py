@@ -33,6 +33,7 @@ DEFAULT_SPAWN_ERROR_RETAIN_S = 30
 DEFAULT_CIM_TIMEOUT_MS = 3000
 DEFAULT_LIST_CAP = 60
 DEFAULT_CLIP_CHARS = 120
+DEFAULT_UI_SCALE = 1.0
 
 # How many entries the launcher remembers.
 LAST_MEMORY = 3
@@ -49,6 +50,10 @@ class Config:
     cim_timeout_ms: int = DEFAULT_CIM_TIMEOUT_MS
     list_cap: int = DEFAULT_LIST_CAP
     clip_chars: int = DEFAULT_CLIP_CHARS
+    # Font scale for the panel (0.8 - 2.0). Body text at 100 % display scaling
+    # is small on a 1440p screen; this is the knob, and A+/A- in the toolbar
+    # writes it back.
+    ui_scale: float = DEFAULT_UI_SCALE
 
     # Launcher memory (T14): most recent first, at most LAST_MEMORY entries.
     last_dirs: List[str] = field(default_factory=list)
@@ -85,6 +90,16 @@ def _as_int(value: Any, default: int, minimum: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return out if out >= minimum else default
+
+
+def _as_float(value: Any, default: float) -> float:
+    """Coerce to float; a bool or garbage keeps the default."""
+    if isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _as_str_list(value: Any, limit: int = LAST_MEMORY) -> List[str]:
@@ -145,6 +160,7 @@ def from_mapping(data: Dict[str, Any]) -> Config:
     cfg.cim_timeout_ms = _as_int(data.get("cim_timeout_ms"), DEFAULT_CIM_TIMEOUT_MS, minimum=1)
     cfg.list_cap = _as_int(data.get("list_cap"), DEFAULT_LIST_CAP, minimum=0)
     cfg.clip_chars = _as_int(data.get("clip_chars"), DEFAULT_CLIP_CHARS, minimum=1)
+    cfg.ui_scale = _as_float(data.get("ui_scale"), DEFAULT_UI_SCALE)
     cfg.last_dirs = _as_str_list(data.get("last_dirs"))
     cfg.last_agents = _as_str_list(data.get("last_agents"))
     cfg.agents = _as_agent_list(data.get("agents"))
@@ -207,6 +223,7 @@ def dumps(cfg: Config) -> str:
         "cim_timeout_ms = %s" % _toml_value(cfg.cim_timeout_ms),
         "list_cap = %s" % _toml_value(cfg.list_cap),
         "clip_chars = %s" % _toml_value(cfg.clip_chars),
+        "ui_scale = %s" % _toml_value(round(float(cfg.ui_scale), 2)),
         "last_dirs = %s" % _toml_value(list(cfg.last_dirs)),
         "last_agents = %s" % _toml_value(list(cfg.last_agents)),
         "",

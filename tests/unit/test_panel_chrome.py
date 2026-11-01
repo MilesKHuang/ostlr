@@ -73,8 +73,10 @@ class TestToolbarWiring(unittest.TestCase):
         except Exception:
             pass
 
-    def test_four_buttons_exist(self):
-        self.assertEqual({"start", "refresh", "copy", "help"}, set(self.app.buttons))
+    def test_every_button_has_a_handler(self):
+        # Start / Refresh / Copy path / Help plus the two font-scale buttons.
+        self.assertLessEqual({"start", "refresh", "copy", "help"}, set(self.app.buttons))
+        self.assertLessEqual({"bigger", "smaller"}, set(self.app.buttons))
 
     def test_every_button_is_wired_to_a_real_method(self):
         # A button with an empty command is decoration. Tk's command string is

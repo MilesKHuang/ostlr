@@ -26,8 +26,8 @@ LIST_COLUMN_PX = 320
 MIN_WINDOW = (900, 560)
 # What the panel opens at. The list alone was 900x560 and the rest of the window
 # was empty black space, which reads as "half a product".
-DEFAULT_WINDOW = (1180, 720)
-DETAIL_COLUMN_PX = 340
+DEFAULT_WINDOW = (1320, 780)
+DETAIL_COLUMN_PX = 380
 
 ELLIPSIS = "\u2026"
 
@@ -188,7 +188,7 @@ def state_word(row: Dict) -> str:
 def row_height_px(mono_linespace: int) -> int:
     """One mono linespace plus the fixed padding - identical with or without
     a marker, because markers live on line 2 and never add a line."""
-    return int(mono_linespace) + type_mod.ROW_PADDING_PX
+    return int(mono_linespace) + type_mod.row_padding_px()
 
 
 def build_row(row: Dict, mono_linespace: int = 16) -> RowLayout:

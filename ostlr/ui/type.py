@@ -5,6 +5,10 @@ Four specs, no more. A view asks for `type.ROW` / `type.META` / `type.TITLE` /
 greps for inline tuples outside this file.
 
 Point sizes (not pixels) so Tk scales them at 125% / 150% display scaling.
+
+Sizes are also multiplied by a user scale (`ui_scale` in config.toml, 0.8-2.0).
+9 pt body text is small on a 1440p panel at 100 % scaling, and the honest fix is
+a knob plus a bigger default, not a guess about the user's monitor.
 """
 
 from __future__ import annotations
@@ -17,10 +21,11 @@ FontSpec = Tuple[str, int, str]
 SANS_FAMILY = "Segoe UI"
 MONO_FAMILY = "Consolas"
 
-ROW: FontSpec = (SANS_FAMILY, 10, "normal")     # one session row, line 1 and 2
-META: FontSpec = (SANS_FAMILY, 9, "normal")     # header counters, status bar, hints
-TITLE: FontSpec = (SANS_FAMILY, 11, "bold")     # empty-state headline, dialog titles
-MONO: FontSpec = (MONO_FAMILY, 9, "normal")     # paths, commands, elapsed, memory
+# Base sizes, in points, before `ui_scale`.
+ROW: FontSpec = (SANS_FAMILY, 12, "normal")     # one session row, line 1 and 2
+META: FontSpec = (SANS_FAMILY, 11, "normal")    # header counters, status bar, hints
+TITLE: FontSpec = (SANS_FAMILY, 14, "bold")     # empty-state headline, dialog titles
+MONO: FontSpec = (MONO_FAMILY, 11, "normal")    # paths, commands, elapsed, memory
 
 SPECS: Dict[str, FontSpec] = {
     "row": ROW,
@@ -29,8 +34,32 @@ SPECS: Dict[str, FontSpec] = {
     "mono": MONO,
 }
 
-# Row height = one mono linespace + this padding (plan section 8.7).
+# Row height = one mono linespace + this padding (plan section 8.7), scaled.
 ROW_PADDING_PX = 8
+
+MIN_SCALE = 0.8
+MAX_SCALE = 2.0
+
+_scale = 1.0
+
+
+def set_scale(value: float) -> float:
+    """Set the user scale (clamped) and return the value actually applied."""
+    global _scale
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 1.0
+    _scale = min(MAX_SCALE, max(MIN_SCALE, number))
+    return _scale
+
+
+def scale() -> float:
+    return _scale
+
+
+def row_padding_px() -> int:
+    return max(2, int(round(ROW_PADDING_PX * _scale)))
 
 
 def spec(name: str) -> FontSpec:
@@ -47,4 +76,5 @@ def as_tk(spec_tuple: FontSpec) -> str:
     first widget. Braces keep a multi-word family in one token.
     """
     family, size, style = spec_tuple
-    return "{%s} %d %s" % (family, size, style)
+    scaled = max(6, int(round(size * _scale)))
+    return "{%s} %d %s" % (family, scaled, style)

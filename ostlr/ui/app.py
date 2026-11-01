@@ -188,6 +188,9 @@ class PanelApp:
                  clipboard: Any = None,
                  launch_fn: Optional[Callable[..., Dict[str, Any]]] = None) -> None:
         self.cfg = cfg or config_mod.Config()
+        # The font scale must be in place before the first widget is built:
+        # every spec is read through type.as_tk() at build time.
+        type_mod.set_scale(getattr(self.cfg, "ui_scale", 1.0))
         self._provider = provider or (lambda: {"v": 1, "header": {}, "rows": []})
         self._focus_fn = focus_fn
         self._bell_fn = bell_fn
@@ -252,6 +255,8 @@ class PanelApp:
             ("refresh", "Refresh", self.refresh_now),
             ("copy", "Copy path", self.copy_selected_path),
             ("help", "Help", self.show_help),
+            ("bigger", "A+", lambda: self.change_scale(0.1)),
+            ("smaller", "A-", lambda: self.change_scale(-0.1)),
         ):
             button = tk.Button(
                 self.toolbar, text=label, command=command, relief="flat",
@@ -270,7 +275,7 @@ class PanelApp:
         self.header_label.pack(fill="x", padx=8, pady=(6, 2))
 
         self.banner_label = tk.Label(
-            outer, text="", anchor="w",
+            outer, text="", anchor="w", justify="left",
             bg=theme.role("bg"), fg=theme.role("warn"),
             font=type_mod.as_tk(type_mod.META))
         self.banner_label.pack(fill="x", padx=8)
@@ -301,11 +306,13 @@ class PanelApp:
         self.legend_label = tk.Label(
             self.detail, text="\n".join(view_model.legend_lines()), anchor="nw",
             justify="left", bg=theme.role("bg"), fg=theme.role("fg_dim"),
+            wraplength=ui_rows.DETAIL_COLUMN_PX - 16,
             font=type_mod.as_tk(type_mod.META))
         self.legend_label.pack(fill="x", pady=(0, 8))
         self.detail_label = tk.Label(
             self.detail, text="", anchor="nw", justify="left",
             bg=theme.role("bg"), fg=theme.role("fg"),
+            wraplength=ui_rows.DETAIL_COLUMN_PX - 16,
             font=type_mod.as_tk(type_mod.MONO))
         self.detail_label.pack(fill="both", expand=True)
 
@@ -354,6 +361,9 @@ class PanelApp:
         # and both produce a view_model receipt - the view owns no string.
         root.bind("<Control-Shift-C>", lambda _e: self.copy_selected_path())
         root.bind("<Control-Shift-R>", lambda _e: self.copy_selected_hint())
+        # Long text must wrap to the window, not run under its edge: the banner
+        # and the two detail labels are re-wrapped whenever the window resizes.
+        root.bind("<Configure>", self._on_resize)
     # --- rendering ----------------------------------------------------
     def render(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Draw one published snapshot. Returns what was drawn (for tests)."""
@@ -471,6 +481,54 @@ class PanelApp:
         except Exception as exc:  # a probe failure must not kill the tick
             self._set_receipt("refresh failed: %s" % exc)
         return self.snapshot
+
+    def change_scale(self, delta: float) -> float:
+        """A+ / A-: grow or shrink every font, and remember it in config.toml.
+
+        Point sizes are read through `type.as_tk` on every widget build, so the
+        whole panel is rebuilt after a change - cheaper and more predictable than
+        walking the widget tree.
+        """
+        applied = type_mod.set_scale(type_mod.scale() + float(delta))
+        try:
+            self.cfg.ui_scale = applied
+            config_mod.save(self.cfg)
+        except Exception:
+            pass
+        self._set_receipt("font scale %.2f" % applied)
+        self._rebuild_for_scale()
+        return applied
+
+    def _on_resize(self, event: Any = None) -> None:
+        """Re-wrap the long labels to the current width.
+
+        A Tk Label does not wrap on its own: without this the banner and the
+        detail column were simply cut off at the window edge once the fonts grew.
+        """
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        width = max(200, self._width() - ui_rows.DETAIL_COLUMN_PX - 40)
+        for label, limit in ((self.banner_label, width),
+                             (self.detail_label, ui_rows.DETAIL_COLUMN_PX - 16),
+                             (self.legend_label, ui_rows.DETAIL_COLUMN_PX - 16)):
+            try:
+                label.configure(wraplength=limit)
+            except Exception:
+                pass
+
+    def _rebuild_for_scale(self) -> None:
+        """Destroy and rebuild the widgets so the new point sizes take effect."""
+        try:
+            for child in list(self.root.winfo_children()):
+                child.destroy()
+        except Exception:
+            return
+        self._row_widgets = []
+        self._build()
+        try:
+            self.render()
+        except Exception:
+            pass
 
     def show_help(self) -> Any:
         """Toolbar Help: what this window can do, in plain words."""
