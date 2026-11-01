@@ -20,8 +20,25 @@
 <script src="vendor/xterm-addon-fit.js"></script>
 <script>
   const FONT_SIZE = 14;
+
+  // --- the font comes from Python ------------------------------------------
+  // A terminal grid only stays aligned when advance(CJK) == 2 * advance(ASCII).
+  // Measured here at 14 px: Consolas 7.70/14.00 = 1.819 (wrong), MS Gothic and
+  // NSimSun 7.00/14.00 = 2.000 (right). Python passes the family (and, when one
+  // is bundled, the font file), so the page never guesses.
+  const query = new URLSearchParams(location.search);
+  const fontFamily = query.get('font') ||
+        'MS Gothic, NSimSun, SimSun, Consolas, monospace';
+  const fontFile = query.get('fontfile') || '';
+  if (fontFile) {
+    // A bundled font wins over every system font, the way proJV keeps its own.
+    const face = new FontFace('OstlrMono', 'url("' + fontFile + '")');
+    document.fonts.add(face);
+    face.load().catch(function () { /* keep the system stack */ });
+  }
+
   const term = new Terminal({
-    fontFamily: 'Consolas, "Cascadia Mono", monospace',
+    fontFamily: fontFamily,
     fontSize: FONT_SIZE,
     lineHeight: 1.0,
     cursorBlink: true,
@@ -78,14 +95,14 @@
     const rows = Math.max(5, Math.floor((height - 6) / cell.h));
     if (cols !== term.cols || rows !== term.rows) {
       const alternate = term.buffer.active.type === 'alternate';
+      const shrank = cols < term.cols || rows < term.rows;
       term.resize(cols, rows);
-      // A terminal owns its display, and conhost clears the screen when the
-      // window changes size. xterm keeps the old cells, so a TUI that repaints
-      // only what it thinks changed leaves its previous frame's borders behind -
-      // the stray box characters the user photographed. Clearing is safe on the
-      // alternate screen (full-screen apps repaint it anyway) and deliberately
-      // NOT done on the normal screen, where it would eat shell history.
-      if (alternate) {
+      // A terminal owns its display and conhost clears on a size change; xterm
+      // keeps the old cells. Clear only when the grid SHRANK: then the previous
+      // frame's borders sit outside the new layout and would survive. On growth
+      // the extra area is blank already, and clearing there would race the
+      // child's own repaint (a visibly washed-out frame).
+      if (alternate && shrank) {
         term.write('\x1b[2J');
       }
     }
@@ -150,6 +167,16 @@
       this.stats = { bytes: 0, writes: 0, since: performance.now(), lastWrite: 0,
                      maxGap: 0, parseMs: 0 };
       return true;
+    },
+    // The font contract, measured in the page: 2.000 or the borders will drift.
+    font: function () {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.font = term.options.fontSize + 'px ' + term.options.fontFamily;
+      const ascii = ctx.measureText('M').width;
+      const cjk = ctx.measureText('\u4e2d').width;
+      return JSON.stringify([term.options.fontFamily, ascii, cjk,
+                             cjk / (ascii || 1)]);
     }
   };
 

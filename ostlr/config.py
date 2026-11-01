@@ -54,6 +54,10 @@ class Config:
     # is small on a 1440p screen; this is the knob, and A+/A- in the toolbar
     # writes it back.
     ui_scale: float = DEFAULT_UI_SCALE
+    # Terminal font stack. Empty = the built-in order, which starts with a
+    # CJK-capable monospace because advance(CJK) must be exactly 2x advance(ASCII):
+    # Consolas gives 1.819 and drifts next to Chinese, MS Gothic/NSimSun give 2.000.
+    font_family: str = ""
 
     # Launcher memory (T14): most recent first, at most LAST_MEMORY entries.
     last_dirs: List[str] = field(default_factory=list)
@@ -161,6 +165,7 @@ def from_mapping(data: Dict[str, Any]) -> Config:
     cfg.list_cap = _as_int(data.get("list_cap"), DEFAULT_LIST_CAP, minimum=0)
     cfg.clip_chars = _as_int(data.get("clip_chars"), DEFAULT_CLIP_CHARS, minimum=1)
     cfg.ui_scale = _as_float(data.get("ui_scale"), DEFAULT_UI_SCALE)
+    cfg.font_family = str(data.get("font_family") or "").strip()
     cfg.last_dirs = _as_str_list(data.get("last_dirs"))
     cfg.last_agents = _as_str_list(data.get("last_agents"))
     cfg.agents = _as_agent_list(data.get("agents"))
@@ -224,6 +229,7 @@ def dumps(cfg: Config) -> str:
         "list_cap = %s" % _toml_value(cfg.list_cap),
         "clip_chars = %s" % _toml_value(cfg.clip_chars),
         "ui_scale = %s" % _toml_value(round(float(cfg.ui_scale), 2)),
+        "font_family = %s" % _toml_value(str(cfg.font_family or "")),
         "last_dirs = %s" % _toml_value(list(cfg.last_dirs)),
         "last_agents = %s" % _toml_value(list(cfg.last_agents)),
         "",

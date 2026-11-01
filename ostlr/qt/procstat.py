@@ -1,27 +1,34 @@
-"""Per-pane workload: CPU%, memory% and GPU memory, measured not guessed.
+"""Per-pane workload: CPU%, memory%, and GPU% with no vendor tool.
 
-The user's complaint about the old "Resources" panel was exact: bars of absolute
-megabytes tell nobody anything, because there is no ceiling to compare against.
-This module answers the question the eye actually asks - *how much of the machine
-is this agent using?* - in percentages, per process tree:
+CPU and memory come from psutil's process tree. GPU comes from the same
+performance counters the Windows Task Manager reads (`GPU Engine` utilization and
+`GPU Process Memory` dedicated bytes), whose instance names carry `pid_<n>`.
 
-    cpu   percent of one core (psutil, normalised to the machine's cores)
-    mem   percent of physical RAM
-    gpu   MiB of device memory, best effort (nvidia-smi); absent when there is no
-          NVIDIA device or no nvidia-smi, and the column then disappears
+They are read through `Get-Counter` in a background thread every few seconds and
+cached, for two reasons: the counters are rate counters (a sample needs a second
+collection), and a PowerShell call costs about a second - doing that on the UI
+thread would freeze the panel for exactly the frames we are trying to measure.
+The direct PDH path was tried first and returned no data on this machine, so the
+proven path is the one used and `gpu_reason()` says which is in play.
 
-Nothing here is inferred: a value that cannot be measured is None and the view
-prints a dash.
+A value that cannot be measured stays None and the view prints a dash. Never a
+fabricated 0: "GPU 0%" and "GPU unknown" mean different things.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import threading
+import time
 from typing import Dict, List, Optional
 
-_CACHE: Dict[str, object] = {"smi": None}
+_LOCK = threading.Lock()
+_GPU: Dict[str, object] = {"pct": {}, "mib": {}, "at": 0.0, "worker": None,
+                           "reason": "", "source": ""}
+_RE = re.compile(r'pid_(\d+)_')
 
 
 def _psutil():
@@ -53,12 +60,7 @@ def cpu_count() -> int:
 
 
 def tree_stats(pid: int) -> Dict[str, Optional[float]]:
-    """CPU%, memory% and RSS for one process tree.
-
-    `cpu_percent` on a tree is the sum of each descendant's share; it is divided
-    by the core count so 100% means "one whole machine", which is the number a
-    person reads.
-    """
+    """CPU%, memory% and RSS for one process tree, summed over its children."""
     psutil = _psutil()
     out: Dict[str, Optional[float]] = {"cpu": None, "mem": None, "rss": None}
     if psutil is None or not pid:
@@ -84,50 +86,105 @@ def tree_stats(pid: int) -> Dict[str, Optional[float]]:
     return out
 
 
-def nvidia_smi() -> Optional[str]:
-    """Path to nvidia-smi once, or None. Cached: the lookup is not free."""
-    if "smi" in _CACHE and _CACHE["smi"] is not None:
-        return str(_CACHE["smi"]) or None
-    path = shutil.which("nvidia-smi")
-    _CACHE["smi"] = path or ""
-    return path or None
+# --- GPU -------------------------------------------------------------------
+
+def gpu_available() -> bool:
+    """True when this platform can be asked at all."""
+    return os.name == "nt" and shutil.which("powershell") is not None
 
 
-def gpu_by_pid() -> Dict[int, int]:
-    """{pid: MiB} from nvidia-smi, or {} when there is no NVIDIA tool.
-
-    Best effort by design: Windows has no public per-process GPU accounting, and
-    a fabricated number would be worse than a missing one.
-    """
-    smi = nvidia_smi()
-    if not smi:
-        return {}
+def _read_gpu_counters() -> Dict[str, object]:
+    """One sample of both GPU counter sets, folded per pid."""
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "try { $u = Get-Counter -Counter '\\GPU Engine(*)\\Utilization Percentage'"
+        " -MaxSamples 1 -ErrorAction Stop;"
+        " $u.CounterSamples | ForEach-Object { \"U|\" + $_.InstanceName + \"|\" + $_.CookedValue }"
+        " } catch { };"
+        "try { $m = Get-Counter -Counter '\\GPU Process Memory(*)\\Dedicated Usage'"
+        " -MaxSamples 1 -ErrorAction Stop;"
+        " $m.CounterSamples | ForEach-Object { \"M|\" + $_.InstanceName + \"|\" + $_.CookedValue }"
+        " } catch { }"
+    )
     try:
         result = subprocess.run(
-            [smi, "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2.0,
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=8.0,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except Exception:
-        return {}
-    out: Dict[int, int] = {}
+    except Exception as exc:
+        return {"pct": {}, "mib": {}, "reason": str(exc)[:80], "source": "get-counter"}
+    percents: Dict[int, float] = {}
+    memory: Dict[int, float] = {}
     for line in (result.stdout or "").splitlines():
-        parts = [piece.strip() for piece in line.split(",")]
-        if len(parts) != 2:
+        parts = line.strip().split("|")
+        if len(parts) != 3:
+            continue
+        kind, instance, value = parts
+        match = _RE.search(instance)
+        if not match:
             continue
         try:
-            out[int(parts[0])] = int(float(parts[1]))
+            pid = int(match.group(1))
+            number = float(value)
         except ValueError:
             continue
-    return out
+        if kind == "U":
+            percents[pid] = percents.get(pid, 0.0) + number
+        elif kind == "M":
+            memory[pid] = max(memory.get(pid, 0.0), number / (1024 * 1024))
+    return {"pct": percents, "mib": memory, "reason": "", "source": "get-counter"}
+
+
+def _gpu_loop(interval_s: float = 3.0) -> None:
+    while True:
+        sample = _read_gpu_counters()
+        with _LOCK:
+            _GPU.update(sample)
+            _GPU["at"] = time.time()
+        time.sleep(interval_s)
+
+
+def start_gpu_worker(interval_s: float = 3.0) -> bool:
+    """Start the background sampler once. False when the platform cannot."""
+    if not gpu_available():
+        with _LOCK:
+            _GPU["reason"] = "no GPU counters on this platform"
+        return False
+    with _LOCK:
+        if _GPU["worker"] is not None:
+            return True
+        worker = threading.Thread(target=_gpu_loop, args=(interval_s,),
+                                  name="ostlr-gpu", daemon=True)
+        _GPU["worker"] = worker
+    worker.start()
+    return True
+
+
+def gpu_by_pid() -> Dict[int, float]:
+    """{pid: GPU utilisation percent} from the last sample (empty until one lands)."""
+    with _LOCK:
+        return dict(_GPU["pct"] or {})
+
+
+def gpu_mib_by_pid() -> Dict[int, float]:
+    with _LOCK:
+        return dict(_GPU["mib"] or {})
+
+
+def gpu_reason() -> str:
+    with _LOCK:
+        return str(_GPU["reason"] or "")
 
 
 def sample(pids: List[int]) -> Dict[int, Dict[str, Optional[float]]]:
-    """One snapshot for every pane pid, GPU included when it exists."""
-    gpu = gpu_by_pid()
+    """One snapshot per pane pid."""
+    percents = gpu_by_pid()
+    memory = gpu_mib_by_pid()
     result: Dict[int, Dict[str, Optional[float]]] = {}
     for pid in pids:
         stats = tree_stats(pid)
-        stats["gpu"] = float(gpu.get(pid)) if pid in gpu else None
+        stats["gpu"] = percents.get(int(pid))
+        stats["gpu_mib"] = memory.get(int(pid))
         result[int(pid)] = stats
     return result
 
@@ -141,4 +198,4 @@ def format_mem(value: Optional[float]) -> str:
 
 
 def format_gpu(value: Optional[float]) -> str:
-    return "-" if value is None else "%d MiB" % int(value)
+    return "-" if value is None else "%d%%" % min(100, int(round(value)))

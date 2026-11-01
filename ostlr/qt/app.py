@@ -71,6 +71,9 @@ class MainWindow(QMainWindow):
 
         if not self.tray.start():
             self._set_receipt("no tray (%s)" % self.tray.reason)
+        # GPU sampling is a background job: the counters need two collections and
+        # a PowerShell round trip, neither of which belongs on the UI thread.
+        procstat.start_gpu_worker()
         if not self._restore_layout():
             self._set_receipt("ready - right-click a folder in Files to start a session")
 
@@ -209,7 +212,7 @@ class MainWindow(QMainWindow):
             self._set_receipt("pane limit reached (%d)" % terminal.MAX_PANES)
             return None
         pane = terminal.TerminalPane(argv or terminal.shell_for(cwd), cwd=cwd,
-                                     title=title or "shell", parent=self)
+                                     title=title or "shell", parent=self, cfg=self.cfg)
         pane.exited.connect(lambda reason, p=pane: self._on_pane_exit(p, reason))
         pane.started.connect(lambda pid, p=pane: self._bind_pane(p, pid))
         pane.l1_report.connect(self._on_l1)
@@ -337,6 +340,7 @@ class MainWindow(QMainWindow):
                 "cpu": stats.get("cpu"),
                 "mem": stats.get("mem"),
                 "gpu": stats.get("gpu"),
+                "gpu_mib": stats.get("gpu_mib"),
                 "rss": stats.get("rss"),
             })
         return rows
@@ -397,12 +401,14 @@ class MainWindow(QMainWindow):
         if not row:
             self._set_receipt("")
             return
-        self._set_receipt("%s  %s (%s)  dir %s  cpu %s  mem %s  gpu %s"
+        self._set_receipt("%s  %s (%s)  dir %s  cpu %s  mem %s  gpu %s/%s"
                           % (row.get("agent"), row["state"], row.get("source"),
                              row.get("cwd") or "?",
                              procstat.format_cpu(row.get("cpu")),
                              procstat.format_mem(row.get("mem")),
-                             procstat.format_gpu(row.get("gpu"))))
+                             procstat.format_gpu(row.get("gpu")),
+                             view_model.format_mem(
+                                 (row.get("gpu_mib") or 0) * 1024 * 1024)))
 
     # --- selection / receipts ---------------------------------------------
     def _selected_row(self):

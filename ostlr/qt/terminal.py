@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Optional
 
-from PySide6.QtCore import QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QThread, QTimer, QUrl, QUrlQuery, Signal
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -212,10 +212,11 @@ class TerminalPane(QWidget):
             self.bridge.write(text)
 
     def __init__(self, argv, cwd: Optional[str] = None, title: str = "",
-                 parent=None) -> None:
+                 parent=None, cfg=None) -> None:
         super().__init__(parent)
         self.argv = list(argv) if not isinstance(argv, str) else [argv]
         self.cwd = cwd
+        self.cfg = cfg
         self.title = title or " ".join(self.argv)[:40]
         self._ready = False
         self._pending: list = []
@@ -246,13 +247,25 @@ class TerminalPane(QWidget):
         self.view.setPage(_Page(self, self.view))
         layout.addWidget(self.view)
         self.view.loadFinished.connect(self._on_load)
-        self.view.load(QUrl.fromLocalFile(_bundled("term.html")))
+        self.view.load(self._term_url())
 
         # Fallback: if the page never reports a grid, start anyway after a second
         # so a broken web view cannot leave the pane permanently empty.
         QTimer.singleShot(1000, lambda: self._start_pty(100, 30))
 
     # --- pty lifecycle: born at the right size ---------------------------
+    def _term_url(self) -> QUrl:
+        """term.html plus the font choice: the page never guesses a font."""
+        from . import fonts as fonts_mod
+
+        url = QUrl.fromLocalFile(_bundled("term.html"))
+        query = QUrlQuery()
+        query.addQueryItem("font", fonts_mod.family_for(self.cfg))
+        bundled = fonts_mod.bundled_font()
+        if bundled:
+            query.addQueryItem("fontfile", QUrl.fromLocalFile(bundled).toString())
+        url.setQuery(query)
+        return url
     def _start_pty(self, cols: int, rows: int) -> None:
         """Spawn the child at the grid the pane actually has.
 

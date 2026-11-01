@@ -118,9 +118,10 @@ class RowDelegate(QStyledItemDelegate):
                          Qt.AlignVCenter | Qt.AlignLeft, view_model.state_word(row))
 
         bars_left = left + 24 + 92
-        bar_width = max(60.0, (rect.width() - bars_left - right_pad - 12) / 2 - 6)
+        bar_width = max(52.0, (rect.width() - bars_left - right_pad - 16) / 3 - 6)
         for index, (value, label) in enumerate(((row.get("cpu"), "cpu"),
-                                                (row.get("mem"), "mem"))):
+                                                (row.get("mem"), "mem"),
+                                                (row.get("gpu"), "gpu"))):
             bx = bars_left + index * (bar_width + 12)
             caption = "-" if value is None else "%d%%" % int(round(value))
             painter.setPen(QPen(style.colour("fg_dim")))
