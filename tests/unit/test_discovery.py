@@ -1,8 +1,11 @@
-"""Discovery: the launcher must find what is installed, not what we listed.
+"""Discovery: the user's own list, and nothing else.
 
-The first build demanded `config.toml` edits to launch a new agent. These tests
-pin the replacement: whole-name matching (so "pi" is not ping), remembered picks
-winning over PATH finds, and the "use the copy that already has my key" hint.
+The first build demanded `config.toml` edits to launch a new agent; the second
+walked PATH and the process table to guess. Both are gone. What is pinned here is
+the contract the user asked for: a program is offered because it was named once,
+and naming it writes `[[agents]]` into config.toml.
+
+    py -3 -m unittest tests.unit.test_discovery
 """
 
 import os
@@ -19,41 +22,32 @@ def write(path, text=""):
         handle.write(text)
 
 
-class TestNameMatching(unittest.TestCase):
-    def test_agents_match_by_whole_name(self):
-        for stem in ("claude", "codex", "projv_tui", "hermes", "claude-code",
-                     "opencode", "aider"):
-            self.assertTrue(discovery._looks_like_agent(stem), stem)
-
-    def test_system_utilities_do_not(self):
-        # The defect: a substring hint "pi" matched all of these.
-        for stem in ("ping", "pip", "pip3", "pathping", "dpiscaling", "fixmapi",
-                     "pickerhost", "appidtel", "printfilterpipelinesvc"):
-            self.assertFalse(discovery._looks_like_agent(stem), stem)
-
-
 class TestEntries(unittest.TestCase):
-    def test_remembered_wins_over_a_path_find(self):
+    def test_only_the_users_choices_are_listed(self):
         cfg = config.Config()
         cfg.agents = [{"id": "projv", "label": "projV",
                        "command": r"D:\ws\proJV\build\Release\proJV_tui.exe", "args": []}]
         entries = discovery.launcher_entries(cfg)
-        ids = [str(e["id"]) for e in entries]
-        self.assertEqual(1, ids.count("projv"))
-        projv = [e for e in entries if e["id"] == "projv"][0]
-        self.assertEqual("remembered", projv["source"])
+        self.assertEqual(1, len(entries))
+        self.assertEqual("projv", entries[0]["id"])
+        self.assertEqual("remembered", entries[0]["source"])
 
-    def test_a_path_candidate_appears_without_config(self):
+    def test_nothing_on_path_is_offered_by_itself(self):
+        # The old build walked PATH and offered every exe whose name looked like an
+        # agent. A machine with ten CLIs installed is not a list the user asked for.
         with tempfile.TemporaryDirectory() as tmp:
-            exe = os.path.join(tmp, "hermes.exe")
-            write(exe)
+            write(os.path.join(tmp, "hermes.exe"))
             old = os.environ.get("PATH", "")
             try:
                 os.environ["PATH"] = tmp + os.pathsep + old
                 ids = [str(e["id"]) for e in discovery.launcher_entries(config.Config())]
             finally:
                 os.environ["PATH"] = old
-        self.assertIn("hermes", ids)
+        self.assertEqual([], ids)
+
+    def test_resolve_only_answers_for_something_that_exists(self):
+        self.assertIsNone(discovery.resolve(r"D:\no\such\agent.exe"))
+        self.assertIsNone(discovery.resolve(""))
 
 
 class TestHome(unittest.TestCase):
@@ -75,37 +69,22 @@ class TestHome(unittest.TestCase):
         self.assertFalse(info["has_key"])
 
 
-class TestLiveCopy(unittest.TestCase):
-    ROWS = [
-        {"pid": 6340, "exe": r"D:\ws\proJV_tui.exe"},
-        {"pid": 9999, "exe": r"C:\Windows\System32\ping.exe"},
-    ]
-
-    def test_a_running_copy_with_a_key_is_offered(self):
-        # The machine's answer to "I already use this one, why is yours keyless".
-        live = discovery.live_copies(self.ROWS)
-        self.assertEqual(1, len(live))          # ping.exe is not an agent
-        self.assertEqual(6340, live[0]["pid"])
-
-    def test_a_non_agent_is_never_offered(self):
-        stems = [os.path.basename(str(item["exe"])).lower() for item in
-                 discovery.live_copies(self.ROWS)]
-        self.assertNotIn("ping.exe", stems)
-
-
 class TestRemember(unittest.TestCase):
     def test_browsing_an_exe_adds_one_entry(self):
         cfg = config.Config()
-        discovery.remember(cfg, r"D:\tools\hermes.exe")
+        cfg.agents = []
         discovery.remember(cfg, r"D:\tools\hermes.exe")
         self.assertEqual(1, len(cfg.agents))
         self.assertEqual(r"D:\tools\hermes.exe", cfg.agents[0]["command"])
+        self.assertEqual("hermes", cfg.agents[0]["id"])
 
     def test_remembering_twice_updates_in_place(self):
         cfg = config.Config()
-        discovery.remember(cfg, r"D:\a\projv_tui.exe")
-        discovery.remember(cfg, r"D:\b\projv_tui.exe")
-        self.assertEqual(r"D:\b\projv_tui.exe", cfg.agents[0]["command"])
+        cfg.agents = []
+        discovery.remember(cfg, r"D:\tools\hermes.exe")
+        discovery.remember(cfg, r"D:\tools\hermes.exe", label="Hermes")
+        self.assertEqual(1, len(cfg.agents))
+        self.assertEqual("Hermes", cfg.agents[0]["label"])
 
 
 if __name__ == "__main__":

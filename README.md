@@ -40,6 +40,15 @@ Self-use tool. No cloud, no telemetry, no account.
   [`docs/parity.md`](docs/parity.md) records the measurements behind that.
 - **Tray.** A tray badge counts what waits.
 
+### What it does not do, on purpose
+
+It never looks at a session it did not start. There is no process scan and no
+window-title guessing, so an agent running in Windows Terminal or an editor is not
+in this list - the panel cannot type into it, size it, or read its bytes, and a row
+you cannot act on is a row that teaches you to stop believing the list. Add a
+program by choosing its exe once (the launcher remembers it in `config.toml`); that
+is the whole contract for what appears.
+
 ## Install
 
 ```
@@ -54,8 +63,9 @@ machine is the Microsoft Store stub - always use `py -3`.
 
 ```
 py -3 -m ostlr                 # the panel
-py -3 -m ostlr --once --json   # one snapshot on stdout, then exit
 py -3 -m ostlr --selftest      # headless PASS/SKIP lines
+py -3 -m ostlr run -- <cmd>    # the producer wrapper
+py -3 -m ostlr.status --list   # what the programs on this machine report
 ```
 
 ## Build the exe

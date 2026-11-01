@@ -120,11 +120,9 @@ class TestSelftestLines(unittest.TestCase):
         # the assertion is about content, not about captured stdout.
         collected = []
         collected += selftest.check_paths()
-        collected += selftest.check_schema()
         collected += selftest.check_imports()
         collected += selftest.check_copy_receipts()
         collected += selftest.check_dedupe()
-        collected += selftest.check_cim_stall()
         collected += selftest.check_l1()
         self.assertEqual(lines, 0)
         for line in collected:
@@ -132,13 +130,13 @@ class TestSelftestLines(unittest.TestCase):
                 self.assertTrue(
                     line.startswith(("PASS ", "FAIL ", "SKIP ")), line)
 
-    def test_stall_line_reports_a_real_measurement(self):
+    def test_no_check_needs_a_window_or_a_scan(self):
+        # The selftest must run with Qt unavailable and without touching the
+        # process table: it used to spend 3 s proving the CIM probe could stall.
         from ostlr import selftest
-
-        lines = selftest.check_cim_stall()
-        self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].startswith("PASS cim stall:"), lines[0])
-        self.assertIn("< 3.2s", lines[0])
+        names = [n for n in dir(selftest) if n.startswith("check_")]
+        self.assertNotIn("check_cim_stall", names)
+        self.assertNotIn("check_schema", names)
 
     def test_l1_line_is_present(self):
         from ostlr import selftest

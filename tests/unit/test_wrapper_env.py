@@ -102,12 +102,6 @@ class TestFrozenBuild(unittest.TestCase):
         else:
             sys.frozen = self._saved
 
-    def test_the_argv_drops_the_module_form(self):
-        from ostlr import launcher
-
-        argv = launcher.command_for({"command": "claude", "args": ["--fast"]})
-        self.assertEqual([sys.executable, "run", "--", "claude", "--fast"], argv)
-
     def test_no_pythonpath_is_injected(self):
         env = actions.wrapper_env({"PYTHONPATH": r"C:\only"})
         self.assertEqual(r"C:\only", env["PYTHONPATH"])

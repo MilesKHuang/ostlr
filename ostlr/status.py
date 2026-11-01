@@ -362,11 +362,96 @@ def run(argv: Any, status_dir: Optional[str] = None,
 
 # --- CLI ------------------------------------------------------------------
 
+def list_records(status_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every readable record in the status directory, oldest pid first.
+
+    This is the honest answer to "is anything reporting right now?": a row exists
+    only if a program (or a pane, or the `run` wrapper) actually wrote it. There is
+    no process scan behind it, so an empty list means exactly that - nobody is
+    talking - and never "nothing is running".
+    """
+    directory = status_dir or str(paths.status_dir())
+    out: List[Dict[str, Any]] = []
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return out
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            pid = int(name[:-5])
+        except ValueError:
+            continue
+        record = read_status(pid, directory)
+        if record:
+            out.append(record)
+    out.sort(key=lambda r: int(r.get("pid") or 0))
+    return out
+
+
+def _pid_alive(pid: int) -> bool:
+    """Is this pid still there? True when we cannot tell - never delete on doubt."""
+    try:
+        import psutil
+        return bool(psutil.pid_exists(int(pid)))
+    except Exception:
+        return True
+
+
+def prune_records(status_dir: Optional[str] = None) -> int:
+    """Delete the records of pids that are gone. Returns how many went.
+
+    A record outlives the process it describes, and the reader cannot tell it from
+    a live one - that is how a status directory ends up with two hundred rows about
+    tests that ran yesterday. This is the cleanup, kept explicit.
+    """
+    removed = 0
+    for record in list_records(status_dir):
+        pid = int(record.get("pid") or 0)
+        if pid <= 0 or _pid_alive(pid):
+            continue
+        if clear_status(pid, status_dir):
+            removed += 1
+    return removed
+
+
+def format_records(records: Sequence[Dict[str, Any]], now: Optional[int] = None) -> List[str]:
+    """One line per record, fixed columns. "" header when there is nothing."""
+    now = int(now if now is not None else time.time())
+    lines = []
+    for record in records:
+        age = _age_s(record, now)
+        lines.append("pid %-7d %-8s %-11s %-10s age=%-5s src=%-12s %s"
+                     % (int(record.get("pid") or 0),
+                        record.get("state") or "?",
+                        ("kind=" + record["kind"]) if record.get("kind") else "",
+                        ("exit=%s" % record["exit_code"]) if record.get("exit_code") is not None else "",
+                        ("%ds" % age) if age is not None else "?",
+                        record.get("source") or "?",
+                        (record.get("msg") or "")[:60]))
+    return lines
+
+
+def _age_s(record: Dict[str, Any], now: int) -> Optional[int]:
+    try:
+        stamp = datetime.strptime(str(record.get("ts")), "%Y-%m-%dT%H:%M:%SZ")
+        stamp = stamp.replace(tzinfo=timezone.utc)
+        return max(0, now - int(stamp.timestamp()))
+    except (TypeError, ValueError):
+        return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ostlr.status",
-        description="Write one L2 status record for a pid (the producer CLI).",
+        description="Write one L2 status record for a pid (the producer CLI), or "
+                    "list the records that exist.",
     )
+    parser.add_argument("--list", action="store_true",
+                        help="print every record in the status directory and exit")
+    parser.add_argument("--prune", action="store_true",
+                        help="with --list: delete the records of pids that are gone")
     parser.add_argument("--pid", type=int, default=None,
                         help="the session root pid (default: this process)")
     parser.add_argument("--state", default=None,
@@ -389,6 +474,19 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     pid = args.pid if args.pid is not None else os.getpid()
+
+    if args.list:
+        if args.prune:
+            gone = prune_records(args.status_dir)
+            print("pruned %d record(s) of pids that are gone" % gone)
+        records = list_records(args.status_dir)
+        lines = format_records(records)
+        if not lines:
+            print("no records in %s" % (args.status_dir or paths.status_dir()))
+            return 0
+        for line in lines:
+            print(line)
+        return 0
 
     if args.clear:
         ok = clear_status(pid, args.status_dir)

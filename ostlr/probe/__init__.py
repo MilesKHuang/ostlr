@@ -1,6 +1,10 @@
 """Probes: the only modules that talk to the operating system.
 
-`cim` (process facts), `procs` (tree/memory), `l2` (status files), `l3` (window
-titles), `git` (branch), `l1` (OSC 7501 stub). Everything else in `ostlr` is
-pure and testable headless.
+`l1` (the OSC 7501 stream we read out of our own PTY), `l2` (status files).
+Everything else in `ostlr` is pure and testable headless.
+
+The process probe (`cim`), the window-title classifier (`l3`), the tree walker
+(`procs`) and the git branch lookup are gone with the machine scan: the panel
+only describes panes it owns, and `psutil` covers the little it still needs
+(creation time, CPU seconds, memory).
 """

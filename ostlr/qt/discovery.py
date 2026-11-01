@@ -1,20 +1,20 @@
-"""Discovery: which TUIs are on this machine?
+"""Where a program comes from: the user's list, plus a file dialog.
 
-The first build shipped a fixed template list plus "set an absolute path in
-config.toml", which meant a new agent (Hermes, whatever comes next) was
-invisible until the user edited a config file. That is backwards. This module
-answers the question from the machine, in three layers:
+There is no machine scan here, and that is a decision, not an omission. The panel
+manages the panes it owns; a program becomes available by being named once -
+`Browse...` in the launcher, or a `[[agents]]` entry in config.toml - and from then
+on it is in the list because the user put it there.
 
-  1. **Running**: processes that already have a console - these are sessions the
-     panel can watch and focus right now (it cannot adopt their PTY).
-  2. **Installed**: executables found by walking PATH once, matched against a
-     small set of name hints. Pure name matching: no absolute paths anywhere, so
-     a new install is picked up with no configuration.
-  3. **Remembered**: whatever the user picked before, including anything that is
-     not on PATH at all (a "Browse..." choice). Stored in config.toml.
+    launcher_entries(cfg)   the config.toml entries, in the user's order
+    resolve(command)        an absolute path for a command, or None
+    home_of(exe)            where that exe keeps its data, and whether it has a key
+    remember(cfg, path)     write a picked program into config.toml
+    entry_for(command,cfg)  the entry for a path, remembered if it is new
 
-Nothing here is a whitelist of locations: a program only has to be callable by
-name, or chosen once by hand.
+The previous version also walked PATH and asked the process table which copies
+were running. Both were removed with the machine scan: a list of ten agents the
+user never chose is noise, and "which copy is alive" stopped being a question the
+panel is allowed to answer.
 """
 
 from __future__ import annotations
@@ -23,70 +23,10 @@ import os
 import shutil
 from typing import Dict, Iterable, List, Optional
 
-# Name hints, not paths: an executable whose stem IS one of these (or starts with
-# it followed by a separator) is offered as a launcher candidate. Strict equality
-# matters: a bare substring match turned "pi" into ping, pip and pathping, and
-# filled the launcher with system utilities.
-NAME_HINTS = (
-    "claude", "claude-code", "codex", "projv", "projv_tui", "hermes", "herd",
-    "aider", "ollama", "gemini", "qwen", "opencode", "crush", "goose", "plandex",
-    "sgpt", "mods", "gptme", "aichat",
-)
-
-# Separators that may follow a hint: "claude-code", "projv_tui", "hermes.exe".
-_SEPARATORS = ("-", "_", ".")
-
-# Names that are almost certainly a launcher and never an agent.
-NEVER = ("uninstall", "setup", "update", "helper", "crashpad")
-
 
 def _stem(path: str) -> str:
     name = os.path.basename(path or "")
     return os.path.splitext(name)[0].lower()
-
-def _looks_like_agent(stem: str) -> bool:
-    """Whole-name match against the hints, not a substring search.
-
-    "pi" as a substring matched ping, pip and pathping; requiring the stem to BE
-    a hint (or to start with it followed by a separator) keeps the launcher to
-    actual agents while still accepting claude-code, projv_tui and hermes-cli.
-    """
-    for hint in NAME_HINTS:
-        if stem == hint:
-            return True
-        for separator in _SEPARATORS:
-            if stem.startswith(hint + separator):
-                return True
-    return False
-
-
-def path_candidates() -> List[Dict[str, object]]:
-    """Every PATH executable whose name looks like an agent.
-
-    One pass over PATH, no recursion, no absolute path baked in: install the
-    same tool anywhere on PATH and it appears here.
-    """
-    seen: Dict[str, Dict[str, object]] = {}
-    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
-        if not directory or not os.path.isdir(directory):
-            continue
-        try:
-            entries = os.listdir(directory)
-        except OSError:
-            continue
-        for name in entries:
-            if not name.lower().endswith(".exe"):
-                continue
-            stem = _stem(name)
-            if any(bad in stem for bad in NEVER):
-                continue
-            if not _looks_like_agent(stem):
-                continue
-            full = os.path.join(directory, name)
-            if stem not in seen:
-                seen[stem] = {"id": stem, "label": name, "command": full,
-                              "source": "path"}
-    return sorted(seen.values(), key=lambda item: str(item["id"]))
 
 
 def remembered(entries: Optional[Iterable[Dict[str, object]]] = None) -> List[Dict[str, object]]:
@@ -110,19 +50,12 @@ def remembered(entries: Optional[Iterable[Dict[str, object]]] = None) -> List[Di
 
 
 def launcher_entries(cfg=None) -> List[Dict[str, object]]:
-    """Remembered picks first (they were chosen on purpose), then PATH finds.
+    """The programs the user chose, and nothing else.
 
-    De-duplicated by id, so a remembered absolute path wins over a PATH hit for
-    the same tool - that is how "use the projV I already have" stays true.
+    A program appears here because somebody pointed at its exe once (`remember`
+    writes it into config.toml). What you named is what you get.
     """
-    entries = remembered(getattr(cfg, "agents", None) if cfg is not None else None)
-    seen = {str(item["id"]) for item in entries}
-    for candidate in path_candidates():
-        if str(candidate["id"]) in seen:
-            continue
-        entries.append(candidate)
-        seen.add(str(candidate["id"]))
-    return entries
+    return remembered(getattr(cfg, "agents", None) if cfg is not None else None)
 
 
 def entry_for(command: str, cfg=None) -> Dict[str, object]:
@@ -195,60 +128,3 @@ def resolve(command: str) -> Optional[str]:
     if os.path.isabs(command):
         return command if os.path.exists(command) else None
     return shutil.which(command)
-
-
-def live_copies(cim_rows=None) -> List[Dict[str, object]]:
-    """Copies of an agent that are RUNNING right now.
-
-    This is the answer to "I already use projV, why is the one you launch
-    keyless?": the machine knows which copy is alive, and a live copy's
-    projv_files is the one that holds the user's API key. Showing it is
-    discovery, not guessing a path.
-    """
-    if cim_rows is None:
-        try:
-            from ..probe import cim as cim_mod
-            sample = cim_mod.probe_once()
-            cim_rows = getattr(sample, "rows", None) or []
-        except Exception:
-            cim_rows = []
-    out: List[Dict[str, object]] = []
-    seen = set()
-    for row in cim_rows or []:
-        exe = str(row.get("exe") or "")
-        if not exe:
-            continue
-        stem = _stem(exe)
-        if not _looks_like_agent(stem):
-            continue
-        key = os.path.normcase(exe)
-        if key in seen:
-            continue
-        seen.add(key)
-        info = home_of(exe)
-        out.append({"exe": exe, "pid": int(row.get("pid") or 0),
-                    "has_key": bool(info["has_key"]),
-                    "config": info["config"]})
-    return out
-
-
-def best_keyed_copy(command: str, cim_rows=None) -> str:
-    """A live copy of the same tool that has an API key, or "".
-
-    Same executable name, already running, with a readable config.toml that
-    contains a key. That is the copy the user actually uses day to day.
-    """
-    stem = _stem(command)
-    if not stem:
-        return ""
-    mine = os.path.normcase(os.path.abspath(command or ""))
-    for copy in live_copies(cim_rows):
-        exe = str(copy["exe"])
-        if not copy["has_key"]:
-            continue
-        if _stem(exe) != stem:
-            continue
-        if os.path.normcase(os.path.abspath(exe)) == mine:
-            continue
-        return exe
-    return ""

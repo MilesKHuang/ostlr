@@ -40,14 +40,6 @@ def check_paths() -> List[str]:
     ]
 
 
-def check_schema() -> List[str]:
-    header = schema.empty_header()
-    missing = [k for k in schema.HEADER_KEYS if k not in header]
-    if missing:
-        return [_line(FAIL, "schema header", "missing %s" % ", ".join(missing))]
-    return [_line(PASS, "schema header", "%d keys" % len(header))]
-
-
 def check_clipboard(clipboard: Any = None) -> List[str]:
     """The `--clipboard` check: read, write, read back, restore."""
     writer = clipboard if clipboard is not None else actions.default_clipboard()
@@ -127,34 +119,6 @@ def check_dedupe() -> List[str]:
     return [_line(FAIL, "copy dedupe", "%d writes" % len(writer.calls))]
 
 
-def check_cim_stall() -> List[str]:
-    """The forced stall: a sleepy fake command must give up at the timeout.
-
-    This is the R1 mitigation measured, not asserted: the probe is given a
-    command that sleeps far longer than the timeout, and the elapsed wall time
-    must stay under 3.2 s. It runs once - a second 3 s sleep would make the
-    selftest feel broken.
-    """
-    import time
-
-    from .probe import cim
-
-    if getattr(sys, "frozen", False):
-        # A frozen exe has no interpreter to hand a `-c` script to; the probe's
-        # own unit tests cover the timeout path. Say so instead of failing.
-        return [_line(SKIP, "cim stall", "frozen build: no interpreter for the sleepy fake")]
-    sleepy = [sys.executable, "-c", "import time; time.sleep(30)"]
-    probe = cim.CimProbe(command=sleepy, timeout_ms=3000)
-    started = time.monotonic()
-    sample = probe.sample()
-    elapsed = time.monotonic() - started
-    if sample.ok:
-        return [_line(FAIL, "cim stall", "the sleepy command returned a sample")]
-    if elapsed >= 3.2:
-        return [_line(FAIL, "cim stall", "%.2fs >= 3.2s" % elapsed)]
-    return [_line(PASS, "cim stall", "%.2fs < 3.2s" % elapsed)]
-
-
 def check_l1() -> List[str]:
     """L1 (OSC 7501) is deferred: a SKIP with the reason, never a failure."""
     from .probe import l1
@@ -218,11 +182,9 @@ def run(clipboard: bool = False, clipboard_backend: Any = None) -> int:
     """Run every check and return the exit code (0 unless something FAILed)."""
     lines: List[str] = []
     lines += check_paths()
-    lines += check_schema()
     lines += check_imports()
     lines += check_copy_receipts()
     lines += check_dedupe()
-    lines += check_cim_stall()
     lines += check_l1()
     if clipboard:
         lines += check_clipboard(clipboard_backend)

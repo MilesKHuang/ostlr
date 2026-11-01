@@ -64,11 +64,6 @@ class Launcher(QDialog):
         self.describe.setWordWrap(True)
         outer.addWidget(self.describe, 1)
 
-        self.use_live = QPushButton("", self)
-        self.use_live.setVisible(False)
-        self.use_live.clicked.connect(self._adopt_live)
-        outer.addWidget(self.use_live)
-
         loc_row = QHBoxLayout()
         loc_row.addWidget(QLabel("Where", self))
         self.group = QButtonGroup(self)
@@ -118,7 +113,6 @@ class Launcher(QDialog):
         entry = self.combo.currentData()
         if not entry:
             self.describe.setText("")
-            self.use_live.setVisible(False)
             return
         command = str(entry.get("command"))
         resolved = discovery.resolve(command)
@@ -131,21 +125,6 @@ class Launcher(QDialog):
         else:
             lines.append("data: no projv_files next to this exe")
         self.describe.setText("\n".join(lines))
-
-        self._live_path = "" if (not info["files_dir"] or info["has_key"]) else \
-            discovery.best_keyed_copy(command)
-        if self._live_path:
-            self.use_live.setText("Use the running copy that has the key: %s" % self._live_path)
-            self.use_live.setVisible(True)
-        else:
-            self.use_live.setVisible(False)
-
-    def _adopt_live(self) -> None:
-        if not self._live_path:
-            return
-        discovery.remember(self.cfg, self._live_path)
-        self._save()
-        self.reload_entries()
 
     # --- files --------------------------------------------------------
     def _pick_dir(self) -> None:

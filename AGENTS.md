@@ -30,8 +30,9 @@ implementation plan is `docs/sop/steve-ostlr.md`.
 
 ```
 py -3 -m ostlr                    # the panel
-py -3 -m ostlr --once --json      # one snapshot, headless
 py -3 -m ostlr --selftest         # PASS/SKIP lines
+py -3 -m ostlr run -- <cmd>       # the producer wrapper
+py -3 -m ostlr.status --list      # what the programs report
 py -3 -m unittest discover -s tests -v
 py -3 tools\build_exe.py          # dist\ostlr\ostlr.exe (one folder)
 ```
@@ -61,8 +62,11 @@ py -3 tools\build_exe.py          # dist\ostlr\ostlr.exe (one folder)
 - Do not leave orphan children on exit; panes stop their own PTY.
 - Do not put a colour, a font size or a glyph outside `ostlr/qt/style.py` (roles)
   and `ostlr/qt/vendor` (the renderer).
-- Do not hardcode agent paths in the launcher. Discovery is the contract; a
-  remembered pick is the only stored location, and the user chose it.
+- Do not scan the machine for sessions. The list is the panes we own; a program
+  joins it only by being named once (`Browse...` writes `[[agents]]` into
+  config.toml). No process table, no window titles, no "probably an agent".
+- Do not hardcode agent paths either: the user's own entry in `config.toml` is the
+  only stored location, and the user chose it.
 - Do not commit `%APPDATA%\ostlr` contents, logs, `dist/` or `build_pyi/`.
 
 ## Style
