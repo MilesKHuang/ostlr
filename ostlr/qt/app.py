@@ -326,13 +326,16 @@ class MainWindow(QMainWindow):
         Correction 1: an external process is not a session here. If the panel did
         not start it, the panel does not claim to manage it.
 
-        The state comes from the pane's status record, and it is aged like any
-        other: past `l2_stale_s` the record is not believable and the row says
-        `unknown` instead of repeating a state nobody re-measured.
+        The state is what the program reported, and it is HELD: the producer is the
+        process in that pane, we can see it is alive, so its last word stands until
+        it says something else or the process ends. A state machine reports on
+        change, not on a heartbeat - an agent waiting for an approval has to stay
+        `blocked` for as long as the human takes. Silence only withdraws the pane's
+        own traffic guess (`source=ostlr-pane`), because a guess must not outlive
+        its evidence.
         """
         from .. import status as status_mod
         from ..age import record_age
-        stale_after = int(getattr(self.cfg, "l2_stale_s", 90) or 90)
         rows: List[Dict[str, object]] = []
         for pane in self.panes:
             pid = int(getattr(pane, "session_pid", 0) or 0)
@@ -344,11 +347,8 @@ class MainWindow(QMainWindow):
             source = str(record.get("source") or "none")
             quiet = pane.quiet_for() if hasattr(pane, "quiet_for") else 0.0
             if not record:
-                # The pane withdrew its claim (or never made one). That is
-                # `unknown`, not `idle`: silence from a child is the absence of a
-                # report, and an agent waiting for approval is silent too.
-                state, source = "unknown", "none"
-            elif age is not None and age > stale_after:
+                # Nothing to report: the pane withdrew its own guess, or never made
+                # one. That is `unknown`, never `idle`.
                 state, source = "unknown", "none"
             stats = self.stats.get(pid) or {}
             msg = str(record.get("msg") or "")
@@ -573,9 +573,24 @@ class MainWindow(QMainWindow):
         menu.exec(self.list.viewport().mapToGlobal(position))
 
     def kill_session(self, row: Dict[str, object]) -> None:
-        """Baseline 3.6: show what will die before anything runs."""
+        """Baseline 3.6: show what will die before anything runs.
+
+        The identity is read NOW and handed to `actions.kill` together with a
+        probe, because the guard refuses a kill it cannot verify - and passing
+        `started_at: 0` (what this did) meant every "End session" was refused
+        *after* the pane had already been stopped: the row disappeared and the
+        process kept running.
+        """
         from PySide6.QtWidgets import QMessageBox as _Box
         pid = int(row.get("pid") or 0)
+        if pid <= 0:
+            self._set_receipt("no pid on this row")
+            return
+        started_at = procstat.start_epoch(pid)
+        if started_at <= 0:
+            self._set_receipt("cannot read this process's creation time - "
+                              "refusing to kill a pid that may have been reused")
+            return
         answer = QMessageBox.question(
             self, "End session",
             "End %s (pid %d)?\n\nIts whole process tree is terminated; it currently "
@@ -584,9 +599,13 @@ class MainWindow(QMainWindow):
         if answer != _Box.StandardButton.Yes:
             return
         pane = self.pane_by_pid.get(pid)
-        if pane is not None:
+        result = actions_mod.kill({"pid": pid, "started_at": started_at,
+                                   "cwd": row.get("cwd")},
+                                  identity_probe=procstat.start_epoch)
+        if result.get("ok") and pane is not None:
+            # The pane stops AFTER the kill was accepted: stopping it first is what
+            # made a refused kill look like a successful one.
             pane.stop()
-        result = actions_mod.kill({"pid": pid, "started_at": 0, "cwd": row.get("cwd")})
         self._set_receipt(str(result.get("receipt") or result.get("reason")))
         self.refresh_now()
 

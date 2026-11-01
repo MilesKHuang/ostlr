@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from .. import view_model
+from . import gauges as gauges_mod
 from . import style
 
 STATE_COLOUR = {
@@ -123,7 +124,12 @@ class RowDelegate(QStyledItemDelegate):
                                                 (row.get("mem"), "mem"),
                                                 (row.get("gpu"), "gpu"))):
             bx = bars_left + index * (bar_width + 12)
-            caption = "-" if value is None else "%d%%" % int(round(value))
+            if label == "mem":
+                # Task Manager's process list shows bytes, not a percentage of
+                # 64 GB: a 200 MB session would otherwise read "0%" for ever.
+                caption = gauges_mod.human_mb(row.get("rss"))
+            else:
+                caption = "-" if value is None else "%d%%" % int(round(value))
             painter.setPen(QPen(style.colour("fg_dim")))
             painter.drawText(QRectF(bx, row_top, bar_width, line_height),
                              Qt.AlignVCenter | Qt.AlignLeft, "%s %s" % (label, caption))

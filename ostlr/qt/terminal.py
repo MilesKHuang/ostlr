@@ -204,6 +204,19 @@ class TerminalPane(QWidget):
     renderer_changed = Signal(str)
 
     def stop(self) -> None:
+        """Stop the PTY and take the pane's status record with it.
+
+        A record left behind outlives the process it describes, and the headless
+        reader cannot tell it from a live report - it would keep a dead pid on the
+        list until the file aged out. Closing the pane is the one moment we know
+        for certain that this record has no owner left.
+        """
+        if self.session_pid:
+            try:
+                from .. import status as status_mod
+                status_mod.clear_status(self.session_pid)
+            except Exception:
+                pass
         if self.bridge is not None:
             self.bridge.stop()
         if self._flush_timer is not None:
