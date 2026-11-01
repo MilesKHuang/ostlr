@@ -11,19 +11,18 @@ EMPTY_DIR = os.path.join(tempfile.gettempdir(), "ostlr-no-such-font-dir")
 
 
 class TestFontContract(unittest.TestCase):
-    def test_the_bundled_font_comes_first_when_there_is_one(self):
-        # A shipped font wins over every system font: that is what shipping one is
-        # for. The exact-2:1 families stay behind it as fallbacks.
-        with tempfile.TemporaryDirectory() as tmp:
-            open(os.path.join(tmp, "terminal.ttc"), "wb").close()
-            family = fonts.family_for(config.Config(), tmp)
-        self.assertEqual("OstlrMono", family.split(",")[0].strip(), family)
-
-    def test_without_a_bundled_file_the_first_family_is_the_bundled_webfont(self):
-        # LXGW WenKai Mono (OFL) ships as woff2 chunks loaded by fonts/wenkai/mono.css,
-        # so it is referenced by family name rather than by a single file.
+    def test_the_bundled_webfont_is_the_first_family(self):
+        # Both halves are bundled web fonts (OFL): JetBrains Mono for ASCII and the
+        # box characters, WenKai for Chinese. No file is loaded from the system
+        # first, and neither may be a Microsoft face.
         family = fonts.family_for(config.Config(), EMPTY_DIR)
-        self.assertIn("LXGW WenKai Mono", family.split(",")[0])
+        self.assertIn("OstlrMono Latin", family.split(",")[0], family)
+        self.assertIn("LXGW WenKai Mono", family)
+
+    def test_nothing_microsoft_is_required(self):
+        family = fonts.family_for(config.Config(), EMPTY_DIR)
+        for banned in ("YaHei", "MS Gothic", "SimSun"):
+            self.assertNotIn(banned, family.split("monospace")[0], family)
 
     def test_a_cjk_face_is_in_the_stack(self):
         family = fonts.family_for(config.Config(), EMPTY_DIR)

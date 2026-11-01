@@ -1,0 +1,13 @@
+/* JetBrains Mono - SIL Open Font License 1.1 (see LICENSE in this folder).
+ *
+ * The western half of the terminal font. It draws ASCII and the box-drawing
+ * characters, whose verticals in this face span the full cell height - that is
+ * what keeps `|` continuous from row to row. Chinese comes from LXGW WenKai Mono
+ * (also OFL), so both halves of the stack are redistributable. */
+@font-face {
+  font-family: 'OstlrMono Latin';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('JetBrainsMono-Regular.woff2') format('woff2');
+}

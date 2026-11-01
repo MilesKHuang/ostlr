@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <title>terminal</title>
 <link rel="stylesheet" href="vendor/xterm.css">
-<!-- LXGW WenKai Mono (OFL-1.1): the bundled CJK monospace. Subsetted woff2 with
-     unicode-range, so the browser picks the right chunk per character. -->
+<!-- Bundled terminal faces, both SIL OFL-1.1 so they can ship:
+     JetBrains Mono for ASCII and the box-drawing characters (its verticals span
+     the full cell, so `|` stays continuous), LXGW WenKai Mono for Chinese. -->
+<link rel="stylesheet" href="fonts/jetbrains/mono.css">
 <link rel="stylesheet" href="fonts/wenkai/mono.css">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #101216; overflow: hidden; }
@@ -36,7 +38,7 @@
   // is bundled, the font file), so the page never guesses.
   const query = new URLSearchParams(location.search);
   const fontFamily = query.get('font') ||
-        "'LXGW WenKai Mono', SimHei, NSimSun, Consolas, monospace";
+        "'OstlrMono Latin', 'LXGW WenKai Mono', SimHei, NSimSun, Consolas, monospace";
   const fontFile = query.get('fontfile') || '';
   if (fontFile) {
     // A bundled font wins over every system font, the way proJV keeps its own.
