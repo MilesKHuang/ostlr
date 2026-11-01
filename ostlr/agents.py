@@ -148,18 +148,71 @@ def _word_re(token: str) -> "re.Pattern[str]":
 
 _TOKEN_RES: Dict[str, "re.Pattern[str]"] = {}
 
+# Hosts that run a script instead of being the agent themselves. Only for these
+# is the rest of the command line allowed to name the agent (node running
+# claude-code/cli.js, python running a codex wrapper).
+_INTERPRETER_HOSTS = frozenset({
+    "node", "nodejs", "bun", "deno", "python", "python3", "pythonw", "py",
+    "pwsh", "powershell", "cmd", "bash", "sh", "wsl",
+})
+
+def _basename(text: str) -> str:
+    """The last path segment, lower-cased, without .exe. 'C:/bin/X.exe' -> 'x'."""
+    piece = (text or "").strip().strip('"').strip("'")
+    if not piece:
+        return ""
+    piece = piece.replace("\\", "/").rsplit("/", 1)[-1]
+    if piece.lower().endswith(".exe"):
+        piece = piece[:-4]
+    return piece.lower()
+
+
+_SCRIPT_EXTENSIONS = (".js", ".mjs", ".cjs", ".py", ".exe", ".cmd", ".bat", ".ps1")
+
+
+def _script_segments(cmdline: str) -> List[str]:
+    """Path segments of the FIRST script argument, if there is one.
+
+    `node .../claude-code/cli.js` -> {"claude-code", "cli"}. A plain argument
+    list (`cmd /c dir D:\\ws\\projV`) yields nothing: `dir` is not a script, and
+    a path that merely appears among the arguments must never name the agent -
+    that is how every VS Code window with this repo open became a "projV
+    session" in the first build.
+    """
+    parts = (cmdline or "").replace("\\", "/").split()
+    for raw in parts[1:]:  # parts[0] is the host itself
+        piece = raw.strip('"').strip("'")
+        if not piece or piece.startswith("-") or piece.startswith("/"):
+            continue
+        if not piece.lower().endswith(_SCRIPT_EXTENSIONS):
+            return []
+        out: List[str] = []
+        for segment in piece.split("/"):
+            segment = segment.strip('"').strip("'")
+            if segment.lower().endswith(".exe"):
+                segment = segment[:-4]
+            if segment and not re.fullmatch(r"[a-z]:", segment.lower()):
+                out.append(segment.lower())
+        return out
+    return []
+
 
 def _matches_tokens(tokens: Sequence[str], exe: str, cmdline: str) -> bool:
-    haystacks = [h for h in (exe or "", cmdline or "") if h]
-    if not haystacks:
+    """Whole-name matching on the executable, never a substring scan.
+
+    A process is an agent when its EXECUTABLE is named like one, or when it is a
+    known interpreter running a script whose path names one.
+    """
+    wanted = {(t or "").strip().lower() for t in tokens}
+    wanted.discard("")
+    base = _basename(exe) or _basename((cmdline or "").split(" ")[0] if cmdline else "")
+    if not base:
         return False
-    for token in tokens:
-        pattern = _TOKEN_RES.get(token)
-        if pattern is None:
-            pattern = _word_re(token)
-            _TOKEN_RES[token] = pattern
-        for text in haystacks:
-            if pattern.search(text):
+    if base in wanted:
+        return True
+    if base in _INTERPRETER_HOSTS:
+        for segment in _script_segments(cmdline or ""):
+            if segment in wanted:
                 return True
     return False
 

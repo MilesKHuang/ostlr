@@ -218,7 +218,8 @@ class PanelApp:
 
         root = tk.Tk()
         root.title(compose_title("", "Ostlr"))
-        root.geometry("%dx%d" % ui_rows.MIN_WINDOW)
+        root.geometry("%dx%d" % ui_rows.DEFAULT_WINDOW)
+        root.minsize(*ui_rows.MIN_WINDOW)
         root.configure(bg=theme.role("bg"))
         style = ttk.Style(root)
         try:
@@ -238,6 +239,29 @@ class PanelApp:
 
         outer = tk.Frame(root, bg=theme.role("bg"))
         outer.pack(fill="both", expand=True)
+
+        # --- the toolbar -------------------------------------------------
+        # Every action the panel can perform has a visible control here. The
+        # first build had none: the launcher existed and nothing opened it, so
+        # the product could not start a session at all.
+        self.toolbar = tk.Frame(outer, bg=theme.role("bg"))
+        self.toolbar.pack(fill="x", padx=8, pady=(8, 2))
+        self.buttons: Dict[str, Any] = {}
+        for key, label, command in (
+            ("start", "+  Start a session", self.open_launcher),
+            ("refresh", "Refresh", self.refresh_now),
+            ("copy", "Copy path", self.copy_selected_path),
+            ("help", "Help", self.show_help),
+        ):
+            button = tk.Button(
+                self.toolbar, text=label, command=command, relief="flat",
+                bg=theme.role("bg_row"), fg=theme.role("fg"),
+                activebackground=theme.role("border"),
+                activeforeground=theme.role("fg"),
+                highlightthickness=0, padx=10, pady=3, cursor="hand2",
+                font=type_mod.as_tk(type_mod.META))
+            button.pack(side="left", padx=(0, 6))
+            self.buttons[key] = button
 
         self.header_label = tk.Label(
             outer, textvariable=self.header_var, anchor="w",
@@ -266,6 +290,25 @@ class PanelApp:
         self._list_window = self.canvas.create_window(
             (0, 0), window=self.list_frame, anchor="nw")
 
+        # --- the detail column -------------------------------------------
+        # The right half used to be empty black space. It now always answers
+        # three questions: what a state means, what the selected row is, and
+        # what the panel can do.
+        self.detail = tk.Frame(body, bg=theme.role("bg"),
+                               width=ui_rows.DETAIL_COLUMN_PX)
+        self.detail.pack(side="right", fill="y", padx=(10, 0))
+        self.detail.pack_propagate(False)
+        self.legend_label = tk.Label(
+            self.detail, text="\n".join(view_model.legend_lines()), anchor="nw",
+            justify="left", bg=theme.role("bg"), fg=theme.role("fg_dim"),
+            font=type_mod.as_tk(type_mod.META))
+        self.legend_label.pack(fill="x", pady=(0, 8))
+        self.detail_label = tk.Label(
+            self.detail, text="", anchor="nw", justify="left",
+            bg=theme.role("bg"), fg=theme.role("fg"),
+            font=type_mod.as_tk(type_mod.MONO))
+        self.detail_label.pack(fill="both", expand=True)
+
         self.empty_frame = tk.Frame(outer, bg=theme.role("bg"))
         self.empty_labels: List[Any] = []
         for index in range(3):
@@ -277,6 +320,16 @@ class PanelApp:
                              font=type_mod.as_tk(spec))
             label.pack(fill="x", padx=8, pady=1)
             self.empty_labels.append(label)
+
+        # A user with no sessions gets one button, in place, not a sentence
+        # telling them to run a command.
+        self.empty_button = tk.Button(
+            self.empty_frame, text="+  Start a session", command=self.open_launcher,
+            relief="flat", bg=theme.role("bg_row"), fg=theme.role("fg"),
+            activebackground=theme.role("border"), activeforeground=theme.role("fg"),
+            highlightthickness=0, padx=10, pady=3, cursor="hand2",
+            font=type_mod.as_tk(type_mod.META))
+        self.empty_button.pack(anchor="w", padx=8, pady=(8, 2))
 
         self.footer_label = tk.Label(
             outer, textvariable=self.footer_var, anchor="w",
@@ -318,6 +371,7 @@ class PanelApp:
         self._render_empty(rows)
         self._render_banner()
         self._render_status(rows)
+        self._render_detail(rows)
         self._update_title(header)
         return {"header": self.header_var.get(), "footer": self.footer_var.get(),
                 "status": self.status_var.get(), "rows": len(rows)}
@@ -389,8 +443,44 @@ class PanelApp:
 
     def _render_banner(self) -> None:
         # The banner states a degraded source, never a guess. The sampler
-        # reports a stale CIM sample through the snapshot's `stale` key.
-        self.banner_label.configure(text=self.snapshot.get("stale") or "")
+        # reports a stale CIM sample through the snapshot's `stale` key; when
+        # nothing has a state at all, say why instead of leaving a grey wall.
+        stale = self.snapshot.get("stale") or ""
+        if stale:
+            self.banner_label.configure(text=stale)
+            return
+        header = self.snapshot.get("header") or {}
+        rows = self.snapshot.get("rows") or []
+        producers = sum(1 for row in rows if (row.get("source") or "") == "l2")
+        self.banner_label.configure(
+            text=view_model.unknown_banner(_int(header.get("sessions")), len(rows), producers))
+
+    def _render_detail(self, rows: Sequence[Dict[str, Any]]) -> None:
+        """The selected row, spelled out. Answers "what did I just click"."""
+        selected = None
+        for row in rows:
+            if _int(row.get("pid")) == self.selected_pid:
+                selected = row
+                break
+        self.detail_label.configure(text="\n".join(view_model.detail_lines(selected)))
+
+    def refresh_now(self) -> Any:
+        """Toolbar Refresh: publish a new snapshot now instead of waiting."""
+        try:
+            self.render()
+        except Exception as exc:  # a probe failure must not kill the tick
+            self._set_receipt("refresh failed: %s" % exc)
+        return self.snapshot
+
+    def show_help(self) -> Any:
+        """Toolbar Help: what this window can do, in plain words."""
+        import tkinter.messagebox as messagebox
+
+        try:
+            messagebox.showinfo("Ostlr", view_model.help_text(), parent=self.root)
+        except Exception:
+            return {"ok": False, "reason": "help_unavailable"}
+        return {"ok": True}
 
     def _render_status(self, rows: Sequence[Dict[str, Any]]) -> None:
         hint = ""

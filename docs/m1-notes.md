@@ -182,3 +182,41 @@ py -3 -m ostlr --once --json --fixture tests/fixtures/snapshot_small.json
 
 The first must exit 0, the second must print only PASS/SKIP lines and exit 0,
 and the third must match `tests/golden/snapshot_small.golden.json`.
+
+## 2. Defects the first real open revealed (fixed)
+
+Everything below shipped green through 485 tests and six design votes, and was
+still unusable the first time a human opened the window. They are recorded
+because the pattern matters more than the individual bugs.
+
+**D3 - the launcher had no entry point.** `open_launcher()` existed, was tested
+indirectly, and nothing called it. The gesture list in the plan named select,
+focus and two copy chords; "open the launcher" was in neither the plan nor the
+code, so the product could not start a single session. The file-tree right-click
+was supposed to be that entry, and it was cut without re-homing the entry point.
+Fixed: a toolbar with Start / Refresh / Copy path / Help, plus the same Start
+button inside the empty state.
+
+**D4 - the list was every process, not every agent.** `sessions.py` kept
+parentless processes "so we can still see them", which filled the panel with
+msedge, Explorer, dllhost, wps and Code rows reading `unknown` - a wall with
+nothing to act on. Fixed: a process is a session only when its executable names
+a template, or a producer wrote a **fresh** status record for it. The freshness
+rule also closes a slower bug: a leftover status file whose pid was reused used
+to keep an unrelated process on screen for ever.
+
+**D5 - a path in the arguments named the agent.** Template matching scanned the
+whole command line as a substring, so every VS Code window opened on
+`D:\ws\projV` was listed as a "projV session". Fixed: match the executable
+basename, or - only for a known interpreter - the script argument's path
+segments. A folder mentioned in the arguments never names an agent.
+
+**D6 - the window explained nothing.** 900x560, a narrow list and empty black
+space on the right. Fixed: 1180x720, a permanent detail column with the state
+legend and the selected row (state, source, cwd, reason, hint), and a banner
+that says why every row is `unknown` instead of leaving a grey wall.
+
+All four are covered by tests now: sessions and template matching have explicit
+cases for "a path in the args is not an agent", "a stale record is not a
+session", "the toolbar buttons exist and are bound", and the detail/legend text
+is generated in `view_model` so the view still owns no literal.

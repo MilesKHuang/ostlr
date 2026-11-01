@@ -331,6 +331,10 @@ def capability_line(producers_found: int, inferred_rows: int) -> str:
 
     It states the limit instead of hiding it: L1 is unsupported here, N
     producers were found, N rows are inferred from window titles.
+    """    """The empty state's capability line, in the user's words.
+
+    It states the limit instead of hiding it: L1 is unsupported here, N
+    producers were found, N rows are inferred from window titles.
     """
     return "%s | producers found: %d | inferred rows: %d" % (
         L1_UNSUPPORTED, max(0, _as_int(producers_found, 0)),
@@ -409,3 +413,93 @@ def summarise(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "inferred": sum(1 for r in rows if r.get("source") == "l3"),
         "waiting": header.get("waiting", 0),
     }
+
+
+# --- the panel's own text (the view owns no literal) -----------------------
+
+# The legend shown beside the list. One line per state, in rank order, in the
+# user's words rather than the protocol's.
+LEGEND_LINES = (
+    "blocked   a human is needed (permission / question / auth)",
+    "working   busy right now",
+    "unknown   not enough data - never guessed as idle",
+    "done      finished just now",
+    "idle      alive, nothing in flight",
+    "error     failed; the last line is in the detail",
+)
+
+HELP_LINES = (
+    "Toolbar: Start opens the launcher, Refresh re-samples, Copy path puts the",
+    "selected path on the clipboard, Help shows this.",
+    "",
+    "Click or the arrow keys select a row; Enter or double-click jumps to its",
+    "window. Ctrl+Shift+C copies the path, Ctrl+Shift+R copies the hint in the",
+    "status bar. Kill and restart live in the right-click menu.",
+    "",
+    "Rows read unknown until something reports their state. Anything started",
+    "with the Start button reports automatically: the launcher runs the agent",
+    "through `ostlr run`, which writes the status file for it.",
+)
+
+
+def legend_lines() -> List[str]:
+    """The state legend, one line per state, for the detail column."""
+    return list(LEGEND_LINES)
+
+
+def help_text() -> str:
+    """What the panel can do, in plain words, for the Help button."""
+    return "\n".join(HELP_LINES)
+
+
+def unknown_banner(total: int, unknown: int, producers: int = 0) -> str:
+    """The one-line explanation shown when nothing knows its state.
+
+    Empty when at least one row has a real state: the banner is for the case
+    where the whole list is grey, which is exactly when a user concludes the
+    tool is broken. Naming the reason is the difference between "broken" and
+    "not connected yet".
+    """
+    total = max(0, _as_int(total, 0))
+    unknown = max(0, _as_int(unknown, 0))
+    if total <= 0 or unknown < total:
+        return ""
+    if producers <= 0:
+        return ("Nothing is reporting a state yet. Sessions started with the Start "
+                "button report automatically; %d running process(es) were launched "
+                "some other way." % total)
+    return ("No fresh state for %d session(s) (last report older than %ds). "
+            "They will go live again on the next report."
+            % (total, _as_int(_stale_seconds(), 90)))
+
+
+def _stale_seconds() -> int:
+    """The staleness bound, from config, without importing it at module load."""
+    try:
+        from . import config as config_mod
+        return int(config_mod.DEFAULT_L2_STALE_S)
+    except Exception:
+        return 90
+
+def detail_lines(row: Optional[Dict[str, Any]]) -> List[str]:
+    """The selected row, spelled out: what it is, where it is, why the state."""
+    if not row:
+        return ["No row selected.", "", "Click a row to see its command and why",
+                "it reads the state it reads."]
+    lines = [
+        "%s  (pid %s)" % (_as_text(row.get("agent")) or "unknown", _as_text(row.get("pid"))),
+        "state      %s  (%s)" % (state_word(row), _as_text(row.get("source")) or "none"),
+        "project    %s" % (_as_text(row.get("project")) or "?"),
+        "cwd        %s" % (_as_text(row.get("cwd")) or "?"),
+        "branch     %s" % branch_text(row.get("branch")),
+        "memory     %s" % format_mem(row.get("mem_bytes")),
+        "elapsed    %s" % format_elapsed(row.get("elapsed_s")),
+    ]
+    reason = _as_text(row.get("reason"))
+    if reason:
+        lines.append("reason     %s" % clip(reason))
+    hint = _as_text(row.get("hint"))
+    if hint:
+        lines.append("")
+        lines.append("hint       %s" % clip(hint))
+    return lines

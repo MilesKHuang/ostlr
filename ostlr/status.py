@@ -54,7 +54,7 @@ HEARTBEAT_S = 10
 
 # Windows refuses to replace a file another handle has open, so the atomic
 # rename is retried a few times before the write is reported as failed.
-REPLACE_RETRIES = 8
+REPLACE_RETRIES = 24
 REPLACE_RETRY_S = 0.01
 
 # Windows creation flags. CREATE_NEW_CONSOLE gives the child a visible console;
@@ -157,7 +157,10 @@ def write_status(pid: int, state: str, kind: str = "", msg: str = "",
             return target
         except OSError as exc:
             last_error = exc
-            time.sleep(REPLACE_RETRY_S * (attempt + 1))
+            # Back off but keep the total bounded: 24 attempts of at most 50 ms
+            # is under a second, and that is enough for a contended rename to
+            # land. An unbounded sleep here would stall a producer's heartbeat.
+            time.sleep(min(REPLACE_RETRY_S * (attempt + 1), 0.05))
             try:
                 tmp.unlink()
             except OSError:

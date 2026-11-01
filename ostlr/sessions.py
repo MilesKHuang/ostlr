@@ -161,23 +161,32 @@ def _select_roots(by_pid: Dict[int, Dict[str, Any]],
         if _same_agent_root(pid, by_pid, template_ids, reported) == pid:
             roots.append(pid)
 
-    # 2. An unnamed process with a parent in the sample is a helper, not a row -
-    #    UNLESS a producer reported it. The helper rule is what keeps a `node`
-    #    worker or a `git` call from becoming a row; the reported exception is
-    #    what keeps a real agent with an unrecognised exe name from vanishing.
+    # 2. An unnamed process is not a session. This used to keep parentless
+    #    processes "so we can still see them", which filled the panel with
+    #    msedge / Explorer / dllhost rows reading `unknown` - a wall the user
+    #    cannot use and cannot act on. Only a producer can say "this is a
+    #    session" for an unrecognised executable.
     roots = [pid for pid in roots
-             if template_ids[pid] != agents.UNKNOWN_ID
-             or pid in reported
-             or int(by_pid[pid].get("ppid", 0)) not in by_pid]
+             if template_ids[pid] != agents.UNKNOWN_ID or pid in reported]
 
-    # 3. A root that is a child of another root is a helper of that session,
-    #    unless it is a named agent (a shell is a launcher, not the agent) or a
-    #    producer reported it.
+    # 3. A root that is a child of another root is a helper of that session -
+    #    unless it is a named agent with an unreported parent. A parent that a
+    #    producer reported OWNS the session: the wrapper we launch is the row,
+    #    and the agent it started is its child, so listing both would show one
+    #    launch as two sessions.
     root_set = set(roots)
-    roots = [pid for pid in roots
-             if int(by_pid[pid].get("ppid", 0)) not in root_set
-             or template_ids[pid] != agents.UNKNOWN_ID
-             or pid in reported]
+
+    def _keep(pid: int) -> bool:
+        if pid in reported:
+            return True
+        parent = int(by_pid[pid].get("ppid", 0))
+        if parent not in root_set:
+            return True
+        if parent in reported:
+            return False
+        return template_ids[pid] != agents.UNKNOWN_ID
+
+    roots = [pid for pid in roots if _keep(pid)]
 
     # 4. A cycle of same-template processes has no root by step 1, so the
     #    lowest pid of each uncovered group represents it. This runs last: an
@@ -188,11 +197,45 @@ def _select_roots(by_pid: Dict[int, Dict[str, Any]],
     for pid in sorted(by_pid):
         if pid in covered:
             continue
+        if template_ids[pid] == agents.UNKNOWN_ID and pid not in reported:
+            continue  # not a session, and step 2 said so
         roots.append(pid)
         covered.update(procs.tree_pids(pid, by_pid.values()))
 
     roots.sort()
     return roots
+
+
+def _is_fresh(record: Dict[str, Any], now: int, stale_s: int = 90) -> bool:
+    """Is this L2 record still believable at `now`?
+
+    A record with no `age_s` and no `ts` cannot be dated, so it counts as stale:
+    guessing "probably fresh" is how a leftover file for a reused pid keeps an
+    unrelated process on screen for ever.
+    """
+    if not isinstance(record, dict):
+        return False
+    age = record.get("age_s")
+    if age is None:
+        for key in ("ts_epoch", "epoch"):
+            if record.get(key) is not None:
+                try:
+                    age = int(now) - int(record.get(key))
+                except (TypeError, ValueError):
+                    return False
+                break
+    if age is None:
+        ts = record.get("ts")
+        try:
+            from datetime import datetime, timezone
+            stamp = datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            age = int(now) - int(stamp.timestamp())
+        except (TypeError, ValueError):
+            return False
+    try:
+        return 0 <= int(age) <= stale_s
+    except (TypeError, ValueError):
+        return False
 
 
 def build_sessions(cim_rows: Sequence[Dict[str, Any]],
@@ -201,9 +244,9 @@ def build_sessions(cim_rows: Sequence[Dict[str, Any]],
                    now: int = 0) -> List[Dict[str, Any]]:
     """One session dict per agent root, in pid order.
 
-    A row whose template is unknown is still a session when it has no parent in
-    the sample: we can see the process, we just cannot name it, and hiding it
-    would be worse than showing it as `unknown`.
+    A process is a session when its executable names a template, or when a
+    producer wrote a fresh status record for it. An unrecognised process is not
+    listed: the panel is a list of agents, not a process browser.
     """
     records = l2_records or {}
     branch_map = branches or {}
@@ -212,9 +255,12 @@ def build_sessions(cim_rows: Sequence[Dict[str, Any]],
         return []
 
     template_ids = _template_ids(by_pid)
-    # A pid with a fresh L2 record is a session by definition: the producer
-    # knows what it is, even when our exe-name guess does not.
-    reported = {pid for pid in records if pid in by_pid}
+    # A pid with a FRESH L2 record is a session by definition: the producer knows
+    # what it is, even when our exe-name guess does not. A stale record must not
+    # qualify - a leftover file whose pid was reused would turn an unrelated
+    # process into a session for ever.
+    reported = {pid for pid, rec in records.items()
+                if pid in by_pid and _is_fresh(rec, now)}
     roots = _select_roots(by_pid, template_ids, reported)
 
     out: List[Dict[str, Any]] = []

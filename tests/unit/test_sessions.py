@@ -27,12 +27,31 @@ class TestTemplates(unittest.TestCase):
         self.assertEqual(agents.template_id_for("C:\\bin\\pwsh.exe", ""), "pwsh")
 
     def test_match_by_cmdline(self):
+        # A known interpreter running a script that names an agent.
         self.assertEqual(
             agents.template_id_for("", "node C:\\npm\\claude-code\\cli.js --resume"),
             "claude")
+        # No executable path at all: the first token is the executable.
         self.assertEqual(agents.template_id_for("", "codex --model gpt"), "codex")
+
+    def test_a_path_in_the_arguments_does_not_name_the_agent(self):
+        """The Code.exe defect: a folder path must not make a process an agent.
+
+        VS Code opened on D:\\ws\\projV had "projv" in its command line and was
+        listed as a projV session. Only the executable (or an interpreter's
+        script) may name the agent.
+        """
         self.assertEqual(
-            agents.template_id_for("", "py -3 -m ostlr run -- projv_tui"), "projv")
+            agents.template_id_for(r"C:\...\Code.exe", r"Code.exe D:\ws\projV"),
+            agents.UNKNOWN_ID)
+        self.assertEqual(
+            agents.template_id_for(r"C:\WINDOWS\Explorer.EXE", r"Explorer.EXE D:\ws\ostlr"),
+            agents.UNKNOWN_ID)
+        # A bare module invocation names nothing either; the wrapper's L2 record
+        # is what makes it a session.
+        self.assertEqual(
+            agents.template_id_for("", "py -3 -m ostlr run -- projv_tui"),
+            agents.UNKNOWN_ID)
 
     def test_whole_word_only(self):
         # A substring match would make these claude sessions. They are not.
@@ -113,12 +132,15 @@ class TestBuildSessions(unittest.TestCase):
         self.assertEqual(len(built), 1)
         self.assertEqual(built[0]["mem_bytes"], 1230)
 
-    def test_unknown_template_is_still_a_session(self):
+    def test_unknown_template_is_not_a_session(self):
+        """An unnamed process is not listed. The panel is a list of agents.
+
+        The first build kept parentless unknowns "so they are visible", and the
+        window filled with msedge / Explorer / dllhost rows reading `unknown`.
+        """
         rows = [row(30, 4, "C:\\bin\\mystery.exe", "mystery --serve")]
         built = sessions.build_sessions(rows)
-        self.assertEqual(len(built), 1)
-        self.assertEqual(built[0]["template_id"], agents.UNKNOWN_ID)
-        self.assertEqual(built[0]["agent"], agents.UNKNOWN_ID)
+        self.assertEqual([], built)
 
     def test_reported_unknown_child_is_a_row(self):
         """The verifier's defect: a producer's record beats our exe-name guess.
@@ -133,9 +155,9 @@ class TestBuildSessions(unittest.TestCase):
             row(51, 50, "C:\\bin\\mystery.exe", "mystery --serve"),  # the child
         ]
         records = {51: {"pid": 51, "state": "blocked", "kind": "permission",
-                        "cwd": "D:/ws/x", "ts_epoch": 1, "msg": "t",
+                        "cwd": "D:/ws/x", "ts_epoch": 1000, "msg": "t",
                         "source": "ostlr-run", "exit_code": None}}
-        built = sessions.build_sessions(rows, records)
+        built = sessions.build_sessions(rows, records, now=1005)
         pids = [s["pid"] for s in built]
         self.assertIn(51, pids)
         child = [s for s in built if s["pid"] == 51][0]
@@ -172,9 +194,9 @@ class TestBuildSessions(unittest.TestCase):
             row(81, 80, "C:\\bin\\mystery.exe", "mystery"),
         ]
         records = {81: {"pid": 81, "state": "working", "kind": "", "cwd": "",
-                        "ts_epoch": 1, "msg": "", "source": "ostlr-run",
+                        "ts_epoch": 1000, "msg": "", "source": "ostlr-run",
                         "exit_code": None}}
-        built = sessions.build_sessions(rows, records)
+        built = sessions.build_sessions(rows, records, now=1005)
         self.assertIn(81, [s["pid"] for s in built])
 
     def test_cwd_from_l2_then_cmdline_then_question(self):
@@ -212,7 +234,7 @@ class TestBuildSessions(unittest.TestCase):
         rows = [row(60, 4, "C:\\bin\\claude.exe", "claude --cwd D:\\ws\\a"),
                 row(61, 4, "C:\\bin\\mystery.exe", "mystery")]
         summary = sessions.summarise(sessions.build_sessions(rows))
-        self.assertEqual(summary["sessions"], 2)
+        self.assertEqual(summary["sessions"], 1)
         self.assertEqual(summary["named"], 1)
         self.assertEqual(summary["cwd_known"], 1)
 

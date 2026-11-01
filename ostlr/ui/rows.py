@@ -24,6 +24,10 @@ LIST_CAP = 60
 DROP_COLUMNS_BELOW_PX = 1100
 LIST_COLUMN_PX = 320
 MIN_WINDOW = (900, 560)
+# What the panel opens at. The list alone was 900x560 and the rest of the window
+# was empty black space, which reads as "half a product".
+DEFAULT_WINDOW = (1180, 720)
+DETAIL_COLUMN_PX = 340
 
 ELLIPSIS = "\u2026"
 

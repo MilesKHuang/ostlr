@@ -22,6 +22,13 @@ py -3 -m ostlr --once --json   # one snapshot to stdout, then exit
 py -3 -m ostlr --selftest      # headless PASS/FAIL/SKIP lines
 ```
 
+The panel is the product; the commands above are for scripts and for
+diagnosing a machine. You can do everything from the window: **Start a session**
+opens the launcher, **Refresh** re-samples, **Copy path** puts the selected
+row's path on the clipboard, **Help** explains the rest. A session started with
+**Start** reports its own state, so the CLI is never required to see a real
+state.
+
 `--once --json` prints exactly one JSON object and nothing else on stdout, so it
 can be piped straight into a parser. `--selftest` exits 0 unless a check really
 fails; a `SKIP` line is not a failure.
