@@ -1,7 +1,13 @@
 # Ostlr M1 - executable design plan
 
-> Status: agreed (Steve, PM revision round 6). Repo `D:\ws\ostlr`. Design baseline `docs/ostlr-implmentation.md` v0.6; measured environment facts `AGENTS.md`.
+> Status: agreed (Steve, PM revision round 6), **executed (M1 shipped)**. Repo `D:\ws\ostlr`. Design baseline `docs/ostlr-implmentation.md` v0.6; measured environment facts `AGENTS.md`.
 > Target: Windows 10/11, Python 3.13 via `py -3`, standard library only. This is the input for the execution stage (`musk`); the task table in section 4 is the contract.
+>
+> **The `standard library only` target was the plan's one wrong conclusion** - a
+> wrong reading of the PyPI index, not a constraint. The shipped stack is
+> PySide6 + ConPTY (pywinpty) + xterm.js; the deviations and the pivot are
+> recorded in [`docs/m1-notes.md`](../m1-notes.md) (§3 and §4). This file stays
+> as the historical contract and is not edited to match the code.
 
 ## 1. Core user value (one sentence)
 

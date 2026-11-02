@@ -1,0 +1,22 @@
+# Ostlr's third-party imports. The allow-list in ostlr/schema.py is the contract:
+# adding a package here means adding it there, and to the README.
+#
+# The index matters on this machine: the default PyPI index serves pure-Python
+# wheels only, so PySide6 and pywinpty look "not found" when they are not. If
+# that happens to you - or you are behind the Great Firewall - add the mirror on
+# the command line:
+#
+#     py -3 -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+
+# the window; QtWebEngine hosts xterm.js
+PySide6>=6.6
+
+# ConPTY: the panel owns the PTY, which is what L1 needs
+pywinpty>=2.0
+
+# process facts: creation time, CPU seconds, memory
+psutil>=5.9
+
+# optional: the tray icon (absence is stated on screen, never faked)
+pystray>=0.19.5
+pillow>=9.0

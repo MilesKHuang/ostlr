@@ -1,8 +1,10 @@
 """T17 - the docs are part of the contract, so they are tested.
 
-The README and the producer recipe carry the two things a user copies by hand:
-the exact JSON status record and the exact command. A typo there is a broken
-product, not a typo, so both are asserted as literal strings.
+The README and the producer docs carry the two things a user copies by hand: the
+exact JSON status record and the exact command. A typo there is a broken
+product, not a typo, so both are asserted as literal strings. They live in
+`docs/producers/status-levels.md` - the README states the three promises and
+links there, so the test asserts the link and the literals in the file.
 
 The acceptance table in `docs/m1-notes.md` is asserted too: the plan says the
 notes carry it verbatim, and "verbatim" is checkable.
@@ -17,6 +19,7 @@ README_ZH = ROOT / "README_zh.md"
 SCREENSHOT = ROOT / "docs" / "ostlr.gif"
 NOTES = ROOT / "docs" / "m1-notes.md"
 RECIPE = ROOT / "docs" / "producers" / "claude-hook.md"
+LEVELS = ROOT / "docs" / "producers" / "status-levels.md"
 
 # The exact command a user pastes. Kept as one string so the test and the docs
 # cannot drift apart silently.
@@ -40,26 +43,43 @@ class TestReadme(unittest.TestCase):
     def setUp(self):
         self.text = read(README)
 
+    def test_the_readme_links_to_the_status_levels(self):
+        # The record and the command moved out of the first screen; the link is
+        # what keeps them one click away from the promise they support.
+        self.assertIn("docs/producers/status-levels.md", self.text)
+
+    def test_the_three_promises_are_on_the_first_screen(self):
+        # What the panel is for, in the user's words - the reason it exists.
+        for line in ("at a glance", "all in hand", "one right-click"):
+            with self.subTest(line=line):
+                self.assertIn(line, self.text)
+
     def test_status_command_is_literal(self):
-        self.assertIn(STATUS_COMMAND, self.text)
+        self.assertIn(STATUS_COMMAND, read(LEVELS))
 
     def test_run_command_is_literal(self):
         self.assertIn(RUN_COMMAND, self.text)
+        self.assertIn(RUN_COMMAND, read(LEVELS))
 
     def test_json_record_fields(self):
+        text = read(LEVELS)
         for field in JSON_FIELDS:
             with self.subTest(field=field):
-                self.assertIn(field, self.text)
+                self.assertIn(field, text)
 
     def test_declared_dependencies_and_py3(self):
         # The project is no longer stdlib-only: it hosts a terminal. What must
-        # still be true is that `py -3` is the documented interpreter, the
-        # dependencies are declared, and the mirror (the thing that makes them
-        # installable here) is named.
+        # still be true is that the dependencies are declared and the mirror is
+        # named for the readers who need it. This machine's quirk (`python` is
+        # the Store stub) belongs in docs/dev-machine.md - a reader elsewhere
+        # does not have it, so it stays off the first screen and out of the rules.
         self.assertIn("py -3", self.text)
-        self.assertIn("Microsoft Store stub", self.text)
         self.assertIn("requirements.txt", self.text)
         self.assertIn("mirrors.aliyun.com", self.text)
+        self.assertNotIn("Microsoft Store", self.text)
+        local = read(ROOT / "docs" / "dev-machine.md")
+        self.assertIn("Store stub", local)
+        self.assertIn("docs/dev-machine.md", read(ROOT / "AGENTS.md"))
 
     def test_honest_limit_is_stated(self):
         # The one thing a user must not have to discover by experiment.

@@ -1,9 +1,9 @@
 """System tray: the panel keeps watching while it is not on screen.
 
 pystray runs its own loop, so it gets a thread and talks back through signals.
-When Pillow or pystray is missing the tray degrades to nothing and the window
-title keeps the count - the design's rule is that a missing affordance is stated,
-never faked.
+When Pillow or pystray is missing the tray degrades to nothing and the receipt
+line says `no tray (reason)` - the design's rule is that a missing affordance is
+stated, never faked.
 """
 
 from __future__ import annotations

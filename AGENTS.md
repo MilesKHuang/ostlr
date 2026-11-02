@@ -6,16 +6,19 @@ watch, type into, focus, kill and restart them. Self-use tool; no cloud, no
 telemetry. The design baseline is `docs/ostlr-implmentation.md`; the agreed
 implementation plan is `docs/sop/steve-ostlr.md`.
 
-## Environment (measured, not assumed)
+## Requirements (any machine)
 
-| Fact | Value | Consequence |
-|---|---|---|
-| OS | Windows (64-bit), real desktop | Qt windows, ConPTY and a tray all work |
-| Python | 3.13 via `py -3` - **`python` is the Store stub** | always `py -3` in scripts and docs |
-| Default PyPI index | serves **pure-Python wheels only** (`psutil`, `PySide6`, `pywinpty` all "not found") | do not conclude a package is impossible from it - that mistake cost a whole design pivot |
-| Mirror | `https://mirrors.aliyun.com/pypi/simple/` works and has the win_amd64 wheels; USTC works; Tsinghua times out here | install with `-i <mirror>`; `requirements.txt` documents it |
-| WebView2 runtime | installed (156.x) | an alternative renderer path exists if Qt is ever dropped |
-| Windows Terminal | `wt.exe` present | an external-window fallback is available |
+| Requirement | Why |
+|---|---|
+| Windows 10 or 11, 64-bit, with a real desktop session | Qt windows, ConPTY and the tray need a desktop; a remote session or a CI runner has none |
+| Python 3.10 or newer, launched as `py -3` | the `py` launcher ships with python.org installs; scripts and docs use that one form |
+| `pip install -r requirements.txt` succeeds | PySide6, pywinpty, psutil; pystray and pillow are optional and their absence is stated on screen |
+| WebView2 runtime | QtWebEngine hosts xterm.js; it ships with Windows 11 and is a download on Windows 10 |
+| Windows Terminal (`wt.exe`) - optional | one external-window fallback; missing it costs nothing |
+
+What was measured on the author's machine - a thin PyPI index, mirror timings, a
+WebView2 version, the build size - is in [`docs/dev-machine.md`](docs/dev-machine.md).
+It does not constrain your machine, and it is not a support matrix.
 
 ## Stack
 
@@ -34,7 +37,7 @@ py -3 -m ostlr --selftest         # PASS/SKIP lines
 py -3 -m ostlr run -- <cmd>       # the producer wrapper
 py -3 -m ostlr.status --list      # what the programs report
 py -3 -m unittest discover -s tests -v
-py -3 tools\build_exe.py          # dist\ostlr\ostlr.exe (one folder)
+.venv\Scripts\python tools\build_exe.py   # dist\ostlr\ostlr.exe (one folder; build from the clean venv, see docs/dev-machine.md)
 ```
 
 - Every module has a unit test. Pure logic (sessions, ladder, store, view_model,

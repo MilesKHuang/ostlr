@@ -2,170 +2,46 @@
 
 **English** | [中文](README_zh.md)
 
-One window for the AI agent sessions you run on this machine: what is running,
-what is **waiting for you**, and one click to focus, kill or start another - each
-in a real terminal the panel owns.
+A control panel for the AI agent sessions you run on this machine.
 
 ![Ostlr: the agent's session in a pane, its state in the list, its directory in the tree](docs/ostlr.gif)
 
-That is this project's agent working inside the panel: the row says `working`,
-the pane shows what it is doing (`[Agent: ExecutingTools]`, `running: exec_shell`),
-and the file tree below the list is rooted in the directory it runs in. A session
-that stops for an approval switches to `blocked` with the reason it gave.
+## Three things it does for you
 
-Self-use tool. No cloud, no telemetry, no account.
+- **The state and footprint of every TUI you run, at a glance.** One row per
+  session: the harness state, plus CPU / memory / GPU use.
+- **Start, switch, close - all in hand.** Up to five panes; a TUI process starts
+  here and is collected here, so none is left behind.
+- **Files, images and folders - one right-click to hand the path to a session.**
+  The tree follows the selected session; right-click to send the path (`path` or
+  `@path`) into the focused pane.
 
-## What it does
+`blocked` needs a producer: proJV, pi, Claude Code, Crush and opencode report by
+themselves; anything else reads `unknown`, never rendered as `idle`.
 
-- **A real terminal, and only that.** The list holds the panes this panel started:
-  it owns their PTYs (ConPTY), so it can size them, read their bytes, answer
-  protocol probes and type into them. A process it did not start is not listed -
-  the panel does not claim to manage what it cannot see inside.
-- **State you can check.** `working` while output flows; when the child goes quiet
-  the pane **withdraws its claim** and the row falls back to `unknown`, because
-  silence is not idleness - an agent waiting for an approval is silent too.
-  `blocked` and `idle` come only from the program itself over OSC 7501 (proJV
-  does this) or from a producer's status file. The program's words, never ours.
-  A state that arrived that way is **held** for as long as the process lives.
-- **One session per row.** The list *is* the switch: click a row and that pane
-  fills the window, its directory becomes the file tree's root, and the keyboard
-  goes to that terminal. Up to five sessions at once; `Ctrl+W`, the middle mouse
-  button, or the row's menu closes one. Commands and directories come back on the
-  next start.
-- **Files beside the sessions.** Double-click a folder to browse it, double-click
-  a file to open it in whatever the OS uses, right-click to start a TUI there or
-  send the path into the focused pane.
-- **You say what runs.** The launcher lists the programs in `config.toml`;
-  *Browse...* picks an exe, and that pick is written back as a `[[agents]]` entry.
-  It also states out loud which copy of the exe will run and whether that copy has
-  an API key - before the click, not after.
-- **Looks like your terminal.** The pane uses the OS terminal's own font (read
-  from Windows Terminal's settings) and lets the terminal draw its own frame, so a
-  TUI hosted here looks like the same TUI outside -
-  [`docs/parity.md`](docs/parity.md) records the measurements behind that.
-- **Tray.** A tray badge counts what waits.
+## Start in three steps
 
-### What it does not do, on purpose
+1. **Install**:
+   ```
+   py -3 -m pip install -r requirements.txt
+   ```
+   In China - or when `PySide6` / `pywinpty` come back "not found" - add a
+   mirror: `-i https://mirrors.aliyun.com/pypi/simple/`.
+2. **Run**:
+   ```
+   py -3 -m ostlr
+   ```
+3. **Add your harness CLI**: `+ New session` -> `Browse...` -> pick the exe. It is
+   written to `config.toml` as a `[[agents]]` entry.
 
-It never looks at a session it did not start. There is no process scan and no
-window-title guessing, so an agent running in Windows Terminal or an editor is not
-in this list - the panel cannot type into it, size it, or read its bytes, and a row
-you cannot act on is a row that teaches you to stop believing the list. Add a
-program by choosing its exe once; that is the whole contract for what appears.
+## Beyond the basics
 
-## Install
-
-```
-py -3 -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
-```
-
-The mirror matters: the default index here serves only pure-Python wheels, so
-`PySide6` and `pywinpty` look unavailable when they are not. `python` on this
-machine is the Microsoft Store stub - always use `py -3`.
-
-## Run
-
-```
-py -3 -m ostlr                 # the panel
-py -3 -m ostlr --selftest      # headless PASS/SKIP lines
-py -3 -m ostlr run -- <cmd>    # the producer wrapper
-py -3 -m ostlr.status --list   # what the programs on this machine report
-```
-
-`--list` prints the status records that exist right now - who is reporting, from
-where, how long ago, and what they said. It reads files, so it never guesses:
-an empty list means nobody is talking, not that nothing is running. Add `--prune`
-to delete the records of pids that are gone.
-
-## Build the exe
-
-```
-py -3 tools\build_exe.py               # one folder, ~640 MB, starts in ~1 s
-py -3 tools\build_exe.py --onefile     # one file, unpacks Chromium per start
-```
-
-`dist\ostlr\ostlr.exe`. Console build on purpose: the same binary answers
-`--selftest` and `run`.
-
-## How a session reports its state
-
-| Level | Source | Status |
-|---|---|---|
-| **L1** | OSC 7501, the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (rev 0.3) | **live**: the pane answers the probe, keeps one record per `id`, shows the most urgent, and applies the spec's exit rule; proJV, Claude Code 2.1.295+, Pi, Crush and opencode emit it |
-| **L2** | a JSON status file per pid | works, and the only source that can say `blocked` from outside a pane |
-| **none** | nothing reported | the row says `unknown` with the reason, never `idle` |
-
-A session started **in the panel** writes its own record (`source=ostlr-pane`)
-while its child is producing output, and withdraws it when the child goes quiet.
-A program that speaks OSC 7501 outranks that guess, and its report is kept until
-the program says otherwise.
-
-### What already speaks it
-
-[Pi](https://github.com/earendil-works/pi) ships a `ProgramStatusReporter` since
-1.4.0, so its rows report `working`, `blocked` (with the dialog's title), `done`,
-`error` and `idle` by themselves. Claude Code 2.1.295+, Crush 0.98+, Factory Droid
-and opencode (through OpenTUI 0.6.3) emit the same sequence; proJV has since it
-was written. Ostlr answers the probe, so nothing needs configuring on either side.
-
-### The status file
-
-`%LOCALAPPDATA%\ostlr\status\<pid>.json`, written with a temp file plus
-`os.replace`:
-
-```json
-{"v": 1, "ts": "2026-10-30T20:11:03Z", "source": "claude-code", "pid": 12345,
- "cwd": "D:/ws/sop-test", "state": "blocked", "kind": "permission",
- "msg": "Approve rm -rf build?", "exit_code": 0}
-```
-
-Write one by hand:
-
-```
-py -3 -m ostlr.status --state blocked --kind permission --pid <pid> --msg "Approve rm -rf build?"
-```
-
-For a session you cannot start in the panel, the wrapper writes the same record
-around any command, so its row stops reading `unknown`:
-
-```
-py -3 -m ostlr run -- <cmd>
-```
-
-The copy-paste recipe for a third-party CLI is in
-[`docs/producers/claude-hook.md`](docs/producers/claude-hook.md) - marked
-**unverified on this machine**, because no third-party hook exists here to fire.
-
-## The honest limit
-
-`blocked` needs a producer. A session started **in a pane** now has one: the pane
-owns the PTY, answers the OSC 7501 probe and parses what the CLI reports (proJV
-does this today), so its row is a report rather than a guess. A stock `claude` or
-`codex` writes no status file and emits no sequence, so its row reads `unknown`
-until something reports - the panel states this on screen rather than showing a
-green row that means nothing. `unknown` is never rendered as `idle`, and nothing
-here infers a state from a window title.
-
-Two rendering rules matter as much as the state ladder, because both were visible
-before they were understood (`docs/parity.md`): the terminal draws its own frame
-(so a TUI's borders are continuous and its gauges are solid), and the default font
-is the OS terminal's own, read from its settings - hosting a TUI here must not
-change how it looks.
-
-## Docs
-
-- [`docs/parity.md`](docs/parity.md) - the rendering contract and the numbers
-  behind it.
-- [`docs/m1-notes.md`](docs/m1-notes.md) - M1 acceptance, kept as history.
-- [`docs/producers/claude-hook.md`](docs/producers/claude-hook.md) - the L2 recipe.
-- [`AGENTS.md`](AGENTS.md) - measured environment facts and the rules.
-
-## Test
-
-```
-py -3 -m unittest discover -s tests -v
-py -3 tools\parity_probe.py            # frame gaps and gauge fill, real pane
-```
+| Bonus | What it is |
+|---|---|
+| **The TUI/CLI reports its own state** | OSC 7501 ([Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status), rev 0.3) is **live**: [pi](https://github.com/earendil-works/pi) is verified. File format and wrapper: [status-levels](docs/producers/status-levels.md) |
+| **Same rendering as the native TUI** | the terminal draws its own frame and the OS terminal's own font is used - [parity](docs/parity.md) |
+| **Scriptable** | `py -3 -m ostlr.status --list` shows what the programs report right now (`--prune` drops dead pids); `py -3 -m ostlr run -- <cmd>` wraps a session you cannot start here; `--selftest` runs headless |
+| **Or pack an exe** | build from the clean venv (see `docs/dev-machine.md`): one folder, ~610 MB, ~1 s start; `--onefile` for a single file |
 
 ---
 
