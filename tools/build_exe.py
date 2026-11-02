@@ -21,9 +21,65 @@ ENTRY = os.path.join(ROOT, "ostlr_entry.py")
 DIST = os.path.join(ROOT, "dist")
 WORK = os.path.join(ROOT, "build_pyi")
 
+# Packages that prove the interpreter is a shared, polluted environment. When
+# any of them is importable, PyInstaller runs its hook and the exe grows by
+# tens of MB of code the panel never imports - numpy shipped in a 621 MB build
+# this way. The allow-list in ostlr/schema.py forbids importing them, but the
+# bundler does not read that list; the build must run in a clean venv.
+DIRTY_PACKAGES = ("numpy", "pandas", "matplotlib", "torch", "scipy", "pytest")
+
+
+def _in_venv() -> bool:
+    return sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+
+
+def _dirty_packages() -> list[str]:
+    import importlib.metadata as metadata
+    found = []
+    for name in DIRTY_PACKAGES:
+        try:
+            metadata.distribution(name)
+            found.append(name)
+        except metadata.PackageNotFoundError:
+            pass
+    return found
+
+
+def _check_clean_environment() -> int:
+    """Refuse to bundle from a shared interpreter, unless told otherwise.
+
+    Returns 0 to continue, 2 to stop. A one-flag escape hatch exists for the
+    person who knows their global interpreter really is dedicated to this
+    project, but the default is to stop and say how to build cleanly.
+    """
+    if "--allow-dirty" in sys.argv:
+        return 0
+    if _in_venv():
+        return 0
+    dirty = _dirty_packages()
+    if not dirty:
+        return 0
+    print(
+        "Refusing to build: the global interpreter also carries %s." % ", ".join(dirty),
+        file=sys.stderr,
+    )
+    print(
+        "PyInstaller collects their hooks, so the exe balloons with code the panel "
+        "never imports. Build in a clean venv instead:",
+        file=sys.stderr,
+    )
+    print("  py -3 -m venv .venv", file=sys.stderr)
+    print("  .venv\\Scripts\\python -m pip install -r requirements.txt pyinstaller", file=sys.stderr)
+    print("  .venv\\Scripts\\python tools\\build_exe.py", file=sys.stderr)
+    print("  (or pass --allow-dirty if you are sure this interpreter is dedicated)", file=sys.stderr)
+    return 2
+
 
 def main() -> int:
     onefile = "--onefile" in sys.argv
+    clean = _check_clean_environment()
+    if clean != 0:
+        return clean
     # A running panel holds DLLs open inside its own folder, so the build that
     # produced it cannot be overwritten while it runs. `--dist <dir>` builds beside
     # it; copy the folder over the old one when the panel is closed.
