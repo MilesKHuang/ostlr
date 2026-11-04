@@ -9,12 +9,16 @@ A control panel for the AI agent sessions you run on this machine.
 ## Three things it does for you
 
 - **The state and footprint of every TUI you run, at a glance.** One row per
-  session: the harness state, plus CPU / memory / GPU use.
+  session: the harness state (a `blocked` row also says how long and what it
+  asked), then CPU, memory and GPU each on its own line, so the length of a bar
+  is the number.
 - **Start, switch, close - all in hand.** Up to five panes; a TUI process starts
-  here and is collected here, so none is left behind.
-- **Files, images and folders - one right-click to hand the path to a session.**
-  The tree follows the selected session; right-click to send the path (`path` or
-  `@path`) into the focused pane.
+  here and is collected here, so none is left behind. A row carries two icons:
+  open a terminal, close this session - closing states the process count and the
+  memory first.
+- **Files, images and folders - one icon to hand the path to a session.**
+  The tree follows the selected session; every row ends with two icons that send
+  `path` or `@path` into the focused pane, quoted when the path needs it.
 
 `blocked` needs a producer: proJV, pi, Claude Code, Crush and opencode report by
 themselves; anything else reads `unknown`, never rendered as `idle`.

@@ -294,3 +294,85 @@ started and *silently did not attach the child* - projV wrote into the parent's
 console while the pipe stayed empty. The `mode con` probe appeared to confirm the
 resize, but the text was coming from the wrong console. It is deleted rather than
 kept as a fallback: a PTY wrapper that leaks output is worse than no wrapper.
+
+## 5. The simplification round: fewer controls, one destination
+
+The first hands-on use produced one complaint, and it was not about a missing
+feature: **the panel had more controls than jobs.** This round deletes the
+controls that had no job and turns the rest into icons. The rule applied was
+"a control that cannot be reached, or that does the same thing as another one,
+is not a feature - it is a promise the UI cannot keep."
+
+| Removed | Why it was not a feature |
+|---|---|
+| `restart` (actions.py) | complete and tested, and wired to nothing: no menu item, no shortcut, no button ever called it. It existed only inside its own tests. |
+| `focus` / `focus_all` (actions.py, top bar) | every row is a pane **inside this window**, so "bring its window to the front" raises the panel you are already looking at. `Focus all` did exactly that, once per pane. |
+| "Copy its directory" (row menu) | the tree copies any path, and selecting a row already prints its directory in the receipt. |
+| "End this session..." (row menu) | the same act as Close, under a second name. See the merge below. |
+| "New window (external terminal)" (launcher) | a session the panel does not own is a row it cannot type into. One destination: `start_from()` has no `location` argument any more, and `cfg.last_location` (written but never persisted - a field that did not exist) is gone. |
+| `Refresh` / `Focus all` as words in the top bar | the tick already samples every 2 s; the two words became two icons, and their names moved into the tooltips. |
+
+One thing was kept deliberately: `actions.launch()` - the wrapper
+(`py -3 -m ostlr run -- <cmd>`) as a callable - is still there and still tested.
+Nothing in the panel calls it now that there is no external console, but it is the
+building block of the documented recipe for wrapping a session you start
+elsewhere, so it stays with that label instead of quietly disappearing.
+
+What replaced them:
+
+| New | Why it is enough |
+|---|---|
+| two icons at the end of every session row: `>_` open a terminal in its directory, `x` close the session | the row is the switch, so the row is where the actions live. Geometry is one function (`rowdelegate.action_at`) used by both the painter and the hit test, so a click cannot land on the icon next to the one the eye saw. |
+| **close = the guarded tree kill** | closing a pane was `PTY.terminate`, and "End session" was `taskkill /T` with an identity probe. Only the second guarantees no orphan grandchild, so it now runs inside the first. The confirmation states the process count and the memory, and a row that is just the session itself closes without a dialog - a confirmation nobody needs is a speed bump, not a safety net. |
+| three gauge lines per row (CPU, MEM, GPU) | with at most five panes there is height to spend. Three bars on one line were 64-90 px each, which is a number with a picture attached that says nothing; a full-width bar carries the value before the digits are read. |
+| GPU line only when something was measured | an absent line is the honest shape of "no data"; a 0% bar would be an invention. The row is one line shorter, and `sizeHint` re-asks every tick. |
+| `blocked 4m` on the identity line | the age is the first thing a waiting human wants, and it was previously one click away in the receipt. |
+| `+`, `copy`, `>_` in the tree toolbar; `>` and `@` at the end of every file row | the same five actions the context menu had, without a right-click. The menu stays as the keyboard route: an icon has no name until a tooltip is read. |
+| `ostlr/inject.py` | the sent text is quoted when it must be (space, shell punctuation, a trailing backslash that would eat the closing quote), and the receipt shows the string the PTY received. Before this, `D:\ws\my project` arrived as two arguments. |
+
+Deliberate limits of the new quoting rule, stated rather than hidden: it is not
+a shell parser. `"` cannot appear in a Windows file name; a tab is quoted like a
+space; `@` goes in front of the quoted text (`@"D:\a b.py"`), which is the form
+Claude Code reads - still **unverified against a real CLI on this machine**, the
+same standing as the producer recipes in section 3.
+
+The suite moved with the code: `test_actions` lost the focus and restart classes
+with the functions, `test_pane_health` now asserts the merged close (identity
+probe first, then the PTY) instead of the old menu, and three new files hold the
+new arithmetic - `test_inject.py` (quoting), `test_ui_geometry.py` (icon slots,
+row height, every icon draws something) and two `test_window` cases that click
+the row's icons with `QTest` and assert the pane count. 265 tests, all green.
+
+## 6. The tree's order: folders first, then numbers as numbers
+
+The complaint was exact and it was not about columns: "打开文件管理器的默认排序，跟我在
+Ostlr 目录树看到的顺序不一样，感觉文件顺序都乱了". `QFileSystemModel` sorts one flat
+list by name, so `dist`, `docs`, `ostlr` sat between `dump.txt` and `LICENSE`, and
+`b10.log` would have come before `b2.log`.
+
+Explorer's Details view is two rules: **folders before files**, and a **natural**
+compare in which a digit run is a number. The obvious implementation is
+`StrCmpLogicalW`, and it is the wrong one here: it does not exist off Windows, it
+cannot be tested without the OS, and it hides the rule inside a syscall. The rule
+is `ostlr/sortkey.py` instead - plain Python, so it runs on Linux and a test can
+state it:
+
+    name_key(name, is_dir) -> (0 if is_dir else 1, [(tag, chunk), ...])
+
+Digits become `(1, int(chunk))`, everything else `(0, text)`, so `b2 < b10` and
+`v1.9 < v1.010`. Case folding follows the platform (`nt` folds, `posix` does not),
+which is the only platform difference in the rule and a semantic one: on Linux
+`README` and `readme` are two files.
+
+The proxy is the one place an index can be read as if it came from the other
+model, and the symptom would be a send that hands the pane the path of the row
+above - exactly the regression the user asked to avoid. So `tree.py` translates
+every index through `_source()`, and `tests/unit/test_tree_order.py` clicks both
+icons on **every** row of a directory whose alphabetical order differs from its
+filesystem order (`zz/ A.txt b2.txt b10.txt`) and asserts the path that leaves is
+the path that was drawn.
+
+Not reproduced, stated rather than hidden: on a Chinese Windows, Explorer sorts
+CJK names by pinyin and this sorts by code point; a few punctuation weights also
+differ. "Stable, natural, folders first, on every platform" is the promise -
+byte-identical to Explorer is not.

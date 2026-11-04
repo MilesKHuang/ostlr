@@ -7,8 +7,13 @@
 Everything the dialog decides is visible before the click: which programs exist
 (greyed with the fix inline when they do not), which copy of the exe will run,
 where that copy keeps its data, and whether it has an API key. "Remember" is the
-default: the directory, the agent and the location all come back next time,
-which is what makes starting a session two interactions instead of ten.
+default: the directory and the agent come back next time, which is what makes
+starting a session two interactions instead of ten.
+
+There is no "where" question. A session this panel starts is a pane: it lives in
+this window, it is listed, and it is collected on exit. An external console would
+be a session we cannot see, and a radio button that offers it is a promise the
+panel cannot keep.
 """
 
 from __future__ import annotations
@@ -18,8 +23,8 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QRadioButton, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from .. import config as config_mod
@@ -27,14 +32,13 @@ from . import discovery, style
 
 
 class Launcher(QDialog):
-    """Pick a directory, pick a TUI, pick where it runs."""
+    """Pick a directory, pick a TUI. The pane is where it runs."""
 
     def __init__(self, cfg, directory: Optional[str] = None, parent=None) -> None:
         super().__init__(parent)
         self.cfg = cfg
         self.chosen: Optional[Dict[str, object]] = None
         self.directory = directory or (getattr(cfg, "last_dirs", None) or [os.getcwd()])[0]
-        self.location = "panel"
 
         self.setWindowTitle("New session")
         self.resize(820, 460)
@@ -63,19 +67,6 @@ class Launcher(QDialog):
         self.describe = QLabel("", self)
         self.describe.setWordWrap(True)
         outer.addWidget(self.describe, 1)
-
-        loc_row = QHBoxLayout()
-        loc_row.addWidget(QLabel("Where", self))
-        self.group = QButtonGroup(self)
-        panel_radio = QRadioButton("Inside Ostlr (a tab)", self)
-        panel_radio.setChecked(True)
-        external_radio = QRadioButton("New window (external terminal)", self)
-        self.group.addButton(panel_radio, 0)
-        self.group.addButton(external_radio, 1)
-        loc_row.addWidget(panel_radio)
-        loc_row.addWidget(external_radio)
-        loc_row.addStretch(1)
-        outer.addLayout(loc_row)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -164,9 +155,8 @@ class Launcher(QDialog):
             return
         self.chosen = dict(entry)
         self.directory = self.dir_edit.text().strip() or os.getcwd()
-        self.location = "panel" if self.group.checkedId() == 0 else "window"
 
-        # Remember all three (baseline 3.3 rule 2): directory, agent, location.
+        # Remember both (baseline 3.3 rule 2): directory and agent.
         try:
             dirs = [self.directory] + [d for d in (self.cfg.last_dirs or [])
                                        if os.path.normcase(d) != os.path.normcase(self.directory)]
@@ -174,7 +164,6 @@ class Launcher(QDialog):
             agent = str(entry.get("id"))
             self.cfg.last_agents = ([agent] + [a for a in (self.cfg.last_agents or [])
                                                if a != agent])[:3]
-            self.cfg.last_location = self.location
             self._save()
         except Exception:
             pass

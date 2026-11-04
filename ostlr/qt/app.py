@@ -1,21 +1,31 @@
-"""The Ostlr window: the baseline's regions, after the first hands-on review.
+"""The Ostlr window: sessions on the left, the terminal on the right.
 
     +--------------------------------------------------------------+
-    | + New session  Refresh  Focus all  [receipt]  [gauges]        |  top bar
-    +----------------+-----------------------------+---------------+
-    | Sessions       |  terminal panes (tabs)      |  Files (dock) |  right dock
-    |  pane-owned    |                             |  Details      |
-    |  cpu/mem bars  |                             |               |
-    +----------------+-----------------------------+---------------+
+    | + New session   [>_]   [refresh]   receipt                    |  top bar
+    +---------------------------+----------------------------------+
+    | Sessions (owned by panel) |                                  |
+    |  agent  blocked 4m  msg   |                                  |
+    |  CPU |====--------|  46%  |      the selected pane           |
+    |  MEM |==----------| 313 MB |                                  |
+    |  GPU |#-----------|   9%  |                                  |
+    +---------------------------+                                  |
+    | Files  [path]  Up  +  copy  >_                               |
+    +---------------------------+----------------------------------+
 
-Corrections this version applies:
+Rules this window keeps:
 
   * the list shows ONLY sessions this panel owns - a lifecycle manager for its
-    own PTYs, not a process browser;
-  * the file tree is docked on the right, where 3.1 draws it;
-  * the receipt moved into the top bar: no row of the window is spent on it;
-  * per-session CPU% / MEM% (GPU MiB when nvidia-smi exists) as bars, instead of
-    raw megabytes nobody can compare;
+    own PTYs, not a process browser. Every row is a pane, so every row can be
+    typed into;
+  * a session starts here or not at all: `+ New session` and the folder icons
+    both end in a pane. There is no external console (see launcher.py);
+  * a row carries two actions and no more: open a terminal in its directory, or
+    close it. Focus, restart and "copy its directory" are gone - for a pane the
+    first is meaningless, the second was never wired, the third lives in the
+    tree;
+  * closing states how many processes and how much memory go with it, because
+    the close is a tree kill (AGENTS.md);
+  * the receipt shares the top bar: no row of the window is spent on it;
   * the window opens inside the screen: half off-screen also made the terminal
     compute its grid for a width the user could not see.
 """
@@ -25,7 +35,7 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
@@ -35,14 +45,19 @@ from PySide6.QtWidgets import (
 
 from .. import actions as actions_mod
 from .. import config as config_mod
+from .. import inject as inject_mod
 from .. import view_model
 from . import (
-    discovery, gauges as gauge_mod, launcher as launcher_mod, layout as layout_mod,
-    procstat, rowdelegate, style, terminal, tray as tray_mod, tree as tree_mod,
+    discovery, icons as icons_mod, launcher as launcher_mod,
+    layout as layout_mod, procstat, rowdelegate, style, terminal, tray as tray_mod,
+    tree as tree_mod,
 )
 
-GLYPH = {"blocked": "\u25cf", "working": "\u25d0", "idle": "\u25cb",
-         "done": "\u2713", "error": "\u2715", "unknown": "\u25cc"}
+# A close is a tree kill: ask before taking a tree this big with it. A single
+# process that is clearly the session itself closes without a dialog, because a
+# confirmation nobody reads is a speed bump, not a safety net.
+CLOSE_CONFIRM_MB = 200
+CLOSE_CONFIRM_PROCS = 2
 
 
 class MainWindow(QMainWindow):
@@ -118,15 +133,24 @@ class MainWindow(QMainWindow):
 
         bar = QHBoxLayout()
         self.actions: Dict[str, QPushButton] = {}
-        for key, label, slot in (
-            ("new", "+  New session", lambda: self.start_session(None)),
-            ("refresh", "Refresh", self.refresh_now),
-            ("focus_all", "Focus all", self.focus_all),
+        new_button = QPushButton("+  New session", self)
+        new_button.clicked.connect(lambda: self.start_session(None))
+        bar.addWidget(new_button)
+        self.actions["new"] = new_button
+        # Two icons instead of two words: the words moved into the tooltip, which
+        # is where they belong for an action whose shape is already a picture.
+        for key, icon_name, tip, slot in (
+            ("terminal", "terminal", "New terminal in this session's directory",
+             self.open_terminal_in_focus),
+            ("refresh", "refresh", "Sample again now", self.refresh_now),
         ):
-            button = QPushButton(label, self)
-            button.clicked.connect(slot)
-            bar.addWidget(button)
-            self.actions[key] = button
+            icon_button = QPushButton(self)
+            icon_button.setIcon(icons_mod.icon(icon_name, "fg", style.ICON_PX + 4))
+            icon_button.setToolTip(tip)
+            icon_button.setAccessibleName(tip)
+            icon_button.clicked.connect(slot)
+            bar.addWidget(icon_button)
+            self.actions[key] = icon_button
         self.receipt_label = QLabel("", self)
         self.receipt_label.setStyleSheet("color: %s;" % style.ROLES["fg_dim"])
         bar.addSpacing(12)
@@ -154,10 +178,14 @@ class MainWindow(QMainWindow):
         self.list.setItemDelegate(rowdelegate.RowDelegate(self.list))
         self.list.setSpacing(2)
         self.list.itemSelectionChanged.connect(self._on_select)
+        self.list.setMouseTracking(True)
+        # Rows are painted to the width they get: a horizontal scrollbar here can
+        # only hide the icons the row exists to offer.
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._session_menu)
-        # Middle click closes a session: it is what a tab's middle click did, and
-        # the list is the only place a session is named now.
+        # Middle click closes a session, and a click on one of the row's two
+        # icons does what that icon draws: the list is the whole switchboard.
         self.list.viewport().installEventFilter(self)
         left_layout.addWidget(self.list, 1)
         left.addWidget(sessions)
@@ -304,22 +332,31 @@ class MainWindow(QMainWindow):
         return self.new_terminal(
             cwd=directory, title="terminal @ %s" % os.path.basename(directory or "?"))
 
-    def close_session(self, pane=None) -> None:
-        """Close one session: stop its PTY, drop its page, forget its row.
+    def close_session(self, pane=None, confirm: bool = True) -> None:
+        """Close one session: end its tree, stop its PTY, drop its page and row.
 
-        A tab's close button and middle click both landed here; the list row is
-        the only place a session is named now, so the row is where it closes.
+        There is one ending, not two. "Close" used to stop the PTY and "End"
+        used to taskkill the tree; the second is what guarantees no orphan
+        grandchild survives, so it runs inside the first. The confirmation states
+        how many processes and how much memory go with the click, and a tree that
+        is just the session itself closes without a dialog.
         """
         pane = pane if isinstance(pane, terminal.TerminalPane) else self._focused_pane()
         if pane is None:
             self._set_receipt("no session to close")
             return
+        pid = int(getattr(pane, "session_pid", 0) or 0)
+        facts = self._close_facts(pid)
+        if confirm and not self._confirm_close(pane, facts):
+            self._set_receipt("close cancelled: %s" % pane.title)
+            return
         title = pane.title
+        ending = self._end_tree(pid, str(getattr(pane, "cwd", "") or ""))
         if pane in self.panes:
             self.panes.remove(pane)
-        for pid, bound in list(self.pane_by_pid.items()):
+        for bound_pid, bound in list(self.pane_by_pid.items()):
             if bound is pane:
-                del self.pane_by_pid[pid]
+                del self.pane_by_pid[bound_pid]
         self.stack.removeWidget(pane)
         pane.stop()
         pane.deleteLater()
@@ -330,18 +367,83 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(self.placeholder)
             self.stack.setCurrentWidget(self.placeholder)
         self.refresh_now()
-        self._set_receipt("closed %s" % title)
+        self._set_receipt("closed %s (%s)" % (title, ending))
+
+    def _close_facts(self, pid: int) -> Dict[str, int]:
+        """How many processes and how much memory the close would take with it."""
+        if pid <= 0:
+            return {"pids": 0, "rss": 0}
+        try:
+            pids = procstat.tree_pids(pid) or [pid]
+            stats = procstat.tree_stats(pid) or {}
+        except Exception:
+            return {"pids": 1, "rss": 0}
+        return {"pids": len(pids), "rss": int(stats.get("rss") or 0)}
+
+    def _confirm_close(self, pane, facts: Dict[str, int]) -> bool:
+        """Ask only when there is something to say: a tree, or real memory."""
+        if facts["pids"] < CLOSE_CONFIRM_PROCS \
+                and facts["rss"] < CLOSE_CONFIRM_MB * 1024 * 1024:
+            return True
+        answer = QMessageBox.question(
+            self, "Close session",
+            "Close %s?\n\n%d process(es) end with it, using %s of memory right "
+            "now." % (pane.title, facts["pids"],
+                      view_model.format_mem(facts["rss"])))
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _end_tree(self, pid: int, cwd: str) -> str:
+        """taskkill the tree with the identity guard; the PTY is the fallback.
+
+        The guard refuses a pid whose creation time cannot be verified, and that
+        refusal is reported rather than hidden: the pane still stops (we own its
+        PTY), but the user is told the tree kill did not happen.
+        """
+        if pid <= 0:
+            return "no pid, the pane stopped"
+        started_at = procstat.start_epoch(pid)
+        if started_at <= 0:
+            return "identity unverified, the pane stopped"
+        try:
+            result = actions_mod.kill({"pid": pid, "started_at": started_at,
+                                       "cwd": cwd},
+                                      identity_probe=procstat.start_epoch)
+        except Exception as exc:
+            return "kill failed (%s), the pane stopped" % exc
+        reason = str(result.get("reason") or "")
+        if result.get("ok"):
+            return "tree ended"
+        survivors = result.get("survivors") or []
+        if reason == "survivors":
+            return "%d process(es) survived" % len(survivors)
+        return "%s, the pane stopped" % reason
 
     def eventFilter(self, watched, event):  # noqa: N802
-        """Middle click on a row closes that session - the old tab gesture."""
+        """The row's two icons, and the middle click that closes a session.
+
+        The hit test is `rowdelegate.action_at()`, the same geometry the painter
+        used, so a click can only land on the icon the eye saw.
+        """
         if watched is self.list.viewport():
-            if event.type() == QEvent.MouseButtonRelease and \
-                    event.button() == Qt.MiddleButton:
+            if event.type() == QEvent.MouseButtonRelease:
                 item = self.list.itemAt(event.position().toPoint())
                 if item is not None:
                     row = item.data(Qt.UserRole) or {}
-                    self.close_session(self.pane_by_pid.get(int(row.get("pid") or 0)))
-                    return True
+                    pid = int(row.get("pid") or 0)
+                    pane = self.pane_by_pid.get(pid)
+                    if event.button() == Qt.MiddleButton:
+                        self.close_session(pane)
+                        return True
+                    if event.button() == Qt.LeftButton:
+                        action = rowdelegate.action_at(
+                            QRectF(self.list.visualItemRect(item)),
+                            QPointF(event.position()))
+                        if action == "close":
+                            self.close_session(pane)
+                            return True
+                        if action == "terminal":
+                            self.open_terminal_here(str(row.get("cwd") or ""))
+                            return True
         return super().eventFilter(watched, event)
 
     def close_current(self) -> None:
@@ -444,6 +546,9 @@ class MainWindow(QMainWindow):
                     item.setData(Qt.UserRole, row)
                     item.setText("%s  %s  %s" % (row.get("agent"), row.get("project"),
                                                  row.get("state")))
+                    # The GPU line comes and goes with the driver, so the height
+                    # is re-asked every tick rather than fixed at creation.
+                    item.setSizeHint(QSize(0, rowdelegate.height_for(row)))
             for pid in [pid for pid in self._items if pid not in seen]:
                 item = self._items.pop(pid)
                 self.list.takeItem(self.list.row(item))
@@ -465,7 +570,7 @@ class MainWindow(QMainWindow):
         item = QListWidgetItem("%s  %s  %s" % (row.get("agent"), row.get("project"),
                                                row.get("state")))
         item.setData(Qt.UserRole, row)
-        item.setSizeHint(QSize(0, rowdelegate.RowDelegate.ROW_HEIGHT))
+        item.setSizeHint(QSize(0, rowdelegate.height_for(row)))
         return item
 
     def _render_banner(self, rows) -> None:
@@ -480,20 +585,18 @@ class MainWindow(QMainWindow):
         """The selected pane, spelled out. One line in the receipt area.
 
         The separate detail pane was one of the two "useless panels": it repeated
-        what the row already showed and ate a third of the window.
+        what the row already showed and ate a third of the window. The row now
+        carries the workload as bars, so this line keeps only what a bar cannot
+        say - where the session actually lives - instead of repeating cpu/mem/gpu
+        in a fourth notation ("gpu -/0 B" was the worst of them).
         """
         row = self._selected_row()
         if not row:
             self._set_receipt("", kind="detail")
             return
-        self._set_receipt("%s  %s (%s)  dir %s  cpu %s  mem %s  gpu %s/%s"
+        self._set_receipt("%s  %s (%s)  dir %s"
                           % (row.get("agent"), row["state"], row.get("source"),
-                             row.get("cwd") or "?",
-                             procstat.format_cpu(row.get("cpu")),
-                             procstat.format_mem(row.get("mem")),
-                             procstat.format_gpu(row.get("gpu")),
-                             view_model.format_mem(
-                                 (row.get("gpu_mib") or 0) * 1024 * 1024)),
+                             row.get("cwd") or "?"),
                           kind="detail")
 
     # --- selection / receipts ---------------------------------------------
@@ -562,44 +665,35 @@ class MainWindow(QMainWindow):
         self._set_receipt("copied %s -> %s  (%s)" % (path, where, mark))
 
     def inject_path_into_pane(self, path: str, at_prefix: bool = False) -> None:
-        """Baseline 3.4: send the path to the focused pane's PTY, without Enter."""
+        """Send the path to the focused pane's PTY, without Enter.
+
+        The text is not the raw path any more: `inject.payload()` quotes it when
+        a space or a shell character would split it, so "D:\\ws\\my project" lands
+        as one argument instead of two. The receipt shows the same string that
+        went into the PTY - a receipt that showed the unquoted path would be a
+        different claim than the one the user just made.
+        """
+        text = inject_mod.payload(path, at_prefix)
         pane = self._focused_pane()
         if pane is None:
             from PySide6.QtGui import QGuiApplication
-            QGuiApplication.clipboard().setText(path)
+            QGuiApplication.clipboard().setText(text or path)
             self._set_receipt("no pane to send to - the path is in the clipboard")
             return
-        text = ("@" + path) if at_prefix else path
         pane.write(text)
         same = bool(getattr(pane, "cwd", None)) and os.path.normcase(
             os.path.dirname(path)) == os.path.normcase(pane.cwd)
         self._set_receipt("sent %s -> Pane\u300c%s\u300d  (%s)" % (
             text, pane.title, "same project" if same else "cross project"))
 
-    def copy_selected_path(self) -> None:
-        row = self._selected_row()
-        path = str((row or {}).get("cwd") or "")
-        if not path or path == "?":
-            self._set_receipt("this row has no directory; use the file tree")
+    def open_terminal_in_focus(self) -> None:
+        """A plain shell in the selected session's directory (or the tree's)."""
+        pane = self._focused_pane()
+        directory = str(getattr(pane, "cwd", "") or self.tree.root or "")
+        if not directory:
+            self._set_receipt("no directory to open a terminal in")
             return
-        from PySide6.QtGui import QGuiApplication
-        QGuiApplication.clipboard().setText(path)
-        self._receipt_copy(path)
-
-    def focus_selected(self) -> None:
-        row = self._selected_row()
-        if not row:
-            self._set_receipt("no row selected")
-            return
-        result = actions_mod.focus(int(row.get("pid") or 0))
-        self._set_receipt(str(result.get("receipt") or result.get("reason") or "focus"))
-
-    def focus_all(self) -> None:
-        focused = 0
-        for pane in self.panes:
-            if actions_mod.focus(getattr(pane, "session_pid", 0) or 0).get("ok"):
-                focused += 1
-        self._set_receipt("focused %d pane window(s)" % focused)
+        self.open_terminal_here(directory)
 
     # --- sessions: start / kill -------------------------------------------
     def start_session(self, directory=None) -> None:
@@ -612,10 +706,15 @@ class MainWindow(QMainWindow):
         dialog.exec()
         if not dialog.chosen:
             return
-        self.start_from(dict(dialog.chosen), dialog.directory, dialog.location)
+        self.start_from(dict(dialog.chosen), dialog.directory)
 
-    def start_from(self, entry: Dict[str, object], directory: str,
-                   location: str = "panel"):
+    def start_from(self, entry: Dict[str, object], directory: str):
+        """Start one session, always as a pane.
+
+        There is no second destination: a session the panel starts is a pane it
+        owns, lists and collects. An external console would be a row we could not
+        type into, which is the one thing the list must never contain.
+        """
         command = discovery.resolve(str(entry.get("command")))
         if not command:
             self._set_receipt("not found: %s" % entry.get("command"))
@@ -624,11 +723,6 @@ class MainWindow(QMainWindow):
         info = discovery.home_of(command)
         title = "%s @ %s" % (entry.get("id") or os.path.basename(command),
                              os.path.basename(directory or "") or "?")
-        if location == "window":
-            result = actions_mod.launch({"command": command, "args": args}, directory)
-            self._set_receipt("started in its own window: %s"
-                              % (result.get("reason") or result.get("detail") or "?"))
-            return None
         pane = self.new_terminal([command] + args, cwd=directory, title=title)
         if pane is None:
             return None
@@ -637,6 +731,11 @@ class MainWindow(QMainWindow):
         return pane
 
     def _session_menu(self, position) -> None:
+        """The row's two actions again, for the keyboard and for right-handers.
+
+        Two entries, not five: the icons above are the visible surface, and a menu
+        that repeated every removed action would put the ghosts back.
+        """
         row = self._selected_row()
         if not row:
             return
@@ -646,53 +745,9 @@ class MainWindow(QMainWindow):
         menu.setStyleSheet(style.stylesheet())
         menu.addAction("Open a terminal in its directory",
                        lambda: self.open_terminal_here(str(row.get("cwd") or "")))
-        menu.addAction("Focus its window", self.focus_selected)
-        menu.addAction("Copy its directory", self.copy_selected_path)
-        menu.addSeparator()
-        # Two different endings, named for what they do: closing the pane stops the
-        # terminal (the child dies with its PTY), ending the tree is the taskkill
-        # with a confirmation. The tab's close button used to be the first one.
         close = menu.addAction("Close session", lambda: self.close_session(pane))
         close.setEnabled(pane is not None)
-        menu.addAction("End this session...", lambda: self.kill_session(row))
         menu.exec(self.list.viewport().mapToGlobal(position))
-
-    def kill_session(self, row: Dict[str, object]) -> None:
-        """Baseline 3.6: show what will die before anything runs.
-
-        The identity is read NOW and handed to `actions.kill` together with a
-        probe, because the guard refuses a kill it cannot verify - and passing
-        `started_at: 0` (what this did) meant every "End session" was refused
-        *after* the pane had already been stopped: the row disappeared and the
-        process kept running.
-        """
-        from PySide6.QtWidgets import QMessageBox as _Box
-        pid = int(row.get("pid") or 0)
-        if pid <= 0:
-            self._set_receipt("no pid on this row")
-            return
-        started_at = procstat.start_epoch(pid)
-        if started_at <= 0:
-            self._set_receipt("cannot read this process's creation time - "
-                              "refusing to kill a pid that may have been reused")
-            return
-        answer = QMessageBox.question(
-            self, "End session",
-            "End %s (pid %d)?\n\nIts whole process tree is terminated; it currently "
-            "uses %s of memory." % (row.get("agent") or "?", pid,
-                                    view_model.format_mem(row.get("rss"))))
-        if answer != _Box.StandardButton.Yes:
-            return
-        pane = self.pane_by_pid.get(pid)
-        result = actions_mod.kill({"pid": pid, "started_at": started_at,
-                                   "cwd": row.get("cwd")},
-                                  identity_probe=procstat.start_epoch)
-        if result.get("ok") and pane is not None:
-            # The pane stops AFTER the kill was accepted: stopping it first is what
-            # made a refused kill look like a successful one.
-            pane.stop()
-        self._set_receipt(str(result.get("receipt") or result.get("reason")))
-        self.refresh_now()
 
     # --- layout / tray -----------------------------------------------------
     def _layout_payload(self) -> List[Dict[str, object]]:

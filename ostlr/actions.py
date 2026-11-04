@@ -1,31 +1,28 @@
-"""Actions - the four things the panel can DO to a session.
+"""Actions - the two things the panel can DO to a session.
 
-    focus(pid)              bring a window to the front
-    launch(template, cwd)   start an agent in its own console
     kill(session, confirm)  end a process tree, after a confirmation
-    restart(session)        relaunch the same command line in the same cwd
+    launch(template, cwd)   the wrapper launch, kept for the documented recipe
+
+`focus` and `restart` are gone on purpose. Every row the panel lists is a pane
+inside this window, so "bring its window to the front" has nothing to raise, and
+the plan's restart was never wired to a control - it existed only in its tests.
+Deleting them removes a promise the UI could not keep.
 
 One rule holds the whole module together: **a failure is a value, never an
 exception**. Every function returns a dict with `ok` and `reason`, so the UI can
-render "focus refused, taskbar flashed" instead of a traceback, and a test can
-assert on the reason string.
+render "the kill was refused, the pane stopped anyway" instead of a traceback,
+and a test can assert on the reason string.
 
-The three guards that matter (plan 7.2 / 7.3 / 8.5):
+The guard that matters (plan 7.2 / 8.5):
 
-  * `focused` is reported only when `GetForegroundWindow()` really matches the
-    window we asked for. Windows silently refuses `SetForegroundWindow` from a
-    background process, and claiming success there would be a lie.
   * `kill` re-reads the process's creation time and refuses with
     `identity_unverified` when it is 0, unparsable or different from the stored
     `started_at`. A recycled pid must never be killed - that is the one mistake
     this product cannot make.
-  * `restart` passes the RAW CIM `CommandLine` string through unmodified. Any
-    `shlex.split` / `.split()` would break every path containing a space, and
-    the relaunched agent would start in the wrong place.
 
-Everything is injectable (`backend`, `runner`, `identity_probe`, `popen`) so the
-whole module is testable headless: no test opens a window, kills a real process,
-or leaves a child running.
+Everything is injectable (`runner`, `identity_probe`, `popen`) so the whole
+module is testable headless: no test opens a window, kills a real process, or
+leaves a child running.
 """
 
 from __future__ import annotations
@@ -47,12 +44,9 @@ CREATE_NEW_CONSOLE = 0x00000010
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 # Reasons. They are user-visible, so they are short and specific.
-REASON_FOCUSED = "focused"
-REASON_FOREGROUND_REFUSED = "foreground_refused"
 REASON_NO_WINDOW = "no_window"
 REASON_IDENTITY_UNVERIFIED = "identity_unverified"
 REASON_CWD_UNKNOWN = "cwd_unknown"
-REASON_RESTART_PENDING = "restart_pending"
 REASON_ALREADY_EXITED = "already_exited"
 REASON_KILL_REQUESTED = "kill requested (pending)"
 REASON_KILLED = "killed"
@@ -105,122 +99,6 @@ def _format_mem(mem_bytes: int) -> str:
     if value >= 1024:
         return "%d KB" % int(round(value / 1024))
     return "%d B" % value
-
-
-# --- focus ----------------------------------------------------------------
-
-class Win32FocusBackend:
-    """The real backend: ctypes user32.
-
-    Imported lazily so the module loads headless (and on a non-Windows host)
-    without touching windll.
-    """
-
-    def __init__(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-
-        self._ctypes = ctypes
-        self._wintypes = wintypes
-        self.user32 = ctypes.windll.user32
-
-    def find_window(self, pid: int) -> Optional[int]:
-        """The first visible top-level window owned by `pid`, or None."""
-        ctypes = self._ctypes
-        wintypes = self._wintypes
-        found: List[int] = []
-        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-
-        def _cb(hwnd, _lparam):
-            try:
-                if not self.user32.IsWindowVisible(hwnd):
-                    return True
-                owner = wintypes.DWORD(0)
-                self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-                if owner.value == int(pid):
-                    found.append(int(hwnd))
-                    return False
-            except Exception:
-                pass
-            return True
-
-        try:
-            self.user32.EnumWindows(WNDENUMPROC(_cb), 0)
-        except Exception:
-            return None
-        return found[0] if found else None
-
-    def set_foreground(self, hwnd: int) -> bool:
-        try:
-            return bool(self.user32.SetForegroundWindow(hwnd))
-        except Exception:
-            return False
-
-    def get_foreground(self) -> int:
-        try:
-            return int(self.user32.GetForegroundWindow())
-        except Exception:
-            return 0
-
-    def flash(self, hwnd: int) -> None:
-        """Best effort: a taskbar flash when Windows refuses the focus."""
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            class FLASHWINFO(ctypes.Structure):
-                _fields_ = [
-                    ("cbSize", wintypes.UINT),
-                    ("hwnd", wintypes.HWND),
-                    ("dwFlags", wintypes.DWORD),
-                    ("uCount", wintypes.UINT),
-                    ("dwTimeout", wintypes.DWORD),
-                ]
-
-            info = FLASHWINFO()
-            info.cbSize = ctypes.sizeof(FLASHWINFO)
-            info.hwnd = hwnd
-            info.dwFlags = 0x00000003  # FLASHW_ALL
-            info.uCount = 3
-            info.dwTimeout = 0
-            self.user32.FlashWindowEx(ctypes.byref(info))
-        except Exception:
-            pass
-
-
-def focus(pid: int, backend: Any = None) -> Dict[str, Any]:
-    """Bring the pid's window to the front.
-
-    `focused` only when `GetForegroundWindow()` matches the window we asked for.
-    A refusal is `foreground_refused` plus a best-effort flash - never a silent
-    no-op, and never a claim of success.
-    """
-    pid = _as_int(pid, 0)
-    if pid <= 0:
-        return fail(REASON_NO_WINDOW, pid=pid)
-
-    if backend is None:
-        if os.name != "nt":
-            return fail(REASON_NO_WINDOW, pid=pid, detail="not windows")
-        try:
-            backend = Win32FocusBackend()
-        except Exception as exc:  # pragma: no cover - broken Windows install
-            return fail(REASON_NO_WINDOW, pid=pid, detail=str(exc))
-
-    hwnd = backend.find_window(pid)
-    if not hwnd:
-        return fail(REASON_NO_WINDOW, pid=pid)
-
-    backend.set_foreground(hwnd)
-    if _as_int(backend.get_foreground(), 0) == _as_int(hwnd, 0):
-        return ok(REASON_FOCUSED, pid=pid, hwnd=hwnd)
-
-    # Windows refused. Flash so the user can find it, and say so.
-    try:
-        backend.flash(hwnd)
-    except Exception:
-        pass
-    return fail(REASON_FOREGROUND_REFUSED, pid=pid, hwnd=hwnd)
 
 
 # --- launch ---------------------------------------------------------------
@@ -472,71 +350,6 @@ def resolve_kill(session: Dict[str, Any], snapshot_rows: Sequence[Dict[str, Any]
 
     survivors = list(tree_pids or [pid])
     return fail(REASON_SURVIVORS, pid=pid, survivors=survivors)
-
-
-# --- restart --------------------------------------------------------------
-
-def restart(session: Dict[str, Any], popen: Any = None,
-            pending: Optional[set] = None,
-            identity_probe: Optional[Callable[[int], int]] = None) -> Dict[str, Any]:
-    """Relaunch the same command line in the same cwd.
-
-    The RAW CIM `CommandLine` string is passed through unmodified: any split
-    would break a quoted path containing a space, and the agent would start in
-    the wrong place. `cwd == "?"` is refused, and so is a second restart while
-    one is still pending.
-
-    The identity guard runs here too, and fails closed: relaunching a recycled
-    pid's command line would start an agent in a project the user never chose.
-    """
-    pid = _as_int(session.get("pid"), 0)
-    started_at = _as_int(session.get("started_at"), 0)
-    key = (pid, started_at)
-
-    cwd = _as_text(session.get("cwd"))
-    if not cwd or cwd == UNKNOWN_CWD:
-        return fail(REASON_CWD_UNKNOWN, pid=pid)
-
-    cmdline = _as_text(session.get("cmdline"))
-    if not cmdline.strip():
-        return fail(REASON_NO_COMMAND, pid=pid)
-
-    if started_at <= 0:
-        return fail(REASON_IDENTITY_UNVERIFIED, pid=pid,
-                    detail="no stored creation time")
-    if identity_probe is None:
-        return fail(REASON_IDENTITY_UNVERIFIED, pid=pid,
-                    detail="no identity probe")
-    current = _as_int(identity_probe(pid), 0)
-    if current <= 0 or current != started_at:
-        return fail(REASON_IDENTITY_UNVERIFIED, pid=pid,
-                    expected=started_at, actual=current)
-
-    if pending is not None:
-        if key in pending:
-            return fail(REASON_RESTART_PENDING, pid=pid)
-        pending.add(key)
-
-    spawn = popen or subprocess.Popen
-    try:
-        # The raw string, not a list: on Windows `Popen` hands a string straight
-        # to CreateProcess, which is exactly what preserves the quoting.
-        child = spawn(cmdline, cwd=cwd, creationflags=creation_flags())
-    except (OSError, ValueError) as exc:
-        if pending is not None:
-            pending.discard(key)
-        return fail(REASON_SPAWN_FAILED, pid=pid, detail=str(exc))
-
-    new_pid = _as_int(getattr(child, "pid", 0), 0)
-    return ok(REASON_LAUNCHED, pid=pid, new_pid=new_pid, cmdline=cmdline, cwd=cwd)
-
-
-def clear_restart_pending(session: Dict[str, Any], pending: Optional[set]) -> None:
-    """Forget a pending restart once the new incarnation has been adopted."""
-    if pending is None:
-        return
-    pending.discard((_as_int(session.get("pid"), 0),
-                     _as_int(session.get("started_at"), 0)))
 
 
 # --- clipboard (T15) ------------------------------------------------------

@@ -21,10 +21,9 @@ def _qt():
 class FakeDialog:
     """Only what `start_session` may rely on."""
 
-    def __init__(self, chosen, directory="D:\\ws", location="panel"):
+    def __init__(self, chosen, directory="D:\\ws"):
         self.chosen = chosen
         self.directory = directory
-        self.location = location
         self.executed = 0
 
     def exec(self):
@@ -97,6 +96,15 @@ class TestLauncherDialog(StartSessionCase):
         self.assertGreaterEqual(dialog.combo.count(), 1)
         labels = [dialog.combo.itemText(i) for i in range(dialog.combo.count())]
         self.assertTrue(any(label for label in labels))
+        dialog.close()
+
+    def test_the_dialog_asks_no_where(self):
+        # One destination: a session this panel starts is a pane it owns, lists
+        # and collects. An external console was a row nobody could type into.
+        from PySide6.QtWidgets import QRadioButton
+        dialog = launcher_mod.Launcher(self.cfg, r"D:\ws")
+        self.assertFalse(hasattr(dialog, "location"))
+        self.assertIsNone(dialog.findChild(QRadioButton))
         dialog.close()
 
 

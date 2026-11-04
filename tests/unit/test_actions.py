@@ -1,9 +1,13 @@
-"""T12/T13 - actions: focus, launch, kill, restart.
+"""T12/T13 - actions: launch and kill.
 
-Every test uses a double: a fake focus backend, a fake taskkill runner, a fake
-Popen. No test opens a window, kills a real process, or leaves a child running.
-The point of the doubles is that the guards can be proven - especially the one
-that matters most: `taskkill` is never called when the identity does not match.
+Every test uses a double: a fake taskkill runner, a fake Popen. No test opens a
+window, kills a real process, or leaves a child running. The point of the doubles
+is that the guard can be proven - `taskkill` is never called when the identity
+does not match.
+
+`focus` and `restart` used to be tested here. Both were removed with the code:
+every row is a pane in this window (nothing to raise), and restart was never
+wired to a control.
 """
 
 import ast
@@ -19,31 +23,6 @@ ACTIONS_PY = REPO / "ostlr" / "actions.py"
 
 
 # --- doubles --------------------------------------------------------------
-
-class FakeFocusBackend:
-    """A focus backend that records what was asked of it."""
-
-    def __init__(self, hwnd=4242, foreground_after=4242, visible=True):
-        self.hwnd = hwnd
-        self.foreground_after = foreground_after
-        self.visible = visible
-        self.calls = []
-
-    def find_window(self, pid):
-        self.calls.append(("find_window", pid))
-        return self.hwnd if self.visible else None
-
-    def set_foreground(self, hwnd):
-        self.calls.append(("set_foreground", hwnd))
-        return True
-
-    def get_foreground(self):
-        self.calls.append(("get_foreground",))
-        return self.foreground_after
-
-    def flash(self, hwnd):
-        self.calls.append(("flash", hwnd))
-
 
 class FakeRunner:
     """A taskkill double that records every invocation."""
@@ -94,37 +73,6 @@ def session(pid=100, started_at=1000, cwd="D:/ws/projV",
         "agent": "claude",
         "project": "projV",
     }
-
-
-# --- focus ----------------------------------------------------------------
-
-class TestFocus(unittest.TestCase):
-    def test_focused_when_foreground_matches(self):
-        backend = FakeFocusBackend(hwnd=4242, foreground_after=4242)
-        result = actions.focus(100, backend=backend)
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["reason"], "focused")
-        self.assertEqual(result["hwnd"], 4242)
-
-    def test_foreground_refused_when_windows_says_no(self):
-        # SetForegroundWindow "succeeds" but the foreground is someone else:
-        # that is a refusal, and it must not be reported as focused.
-        backend = FakeFocusBackend(hwnd=4242, foreground_after=777)
-        result = actions.focus(100, backend=backend)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "foreground_refused")
-        self.assertIn(("flash", 4242), backend.calls)
-
-    def test_no_window(self):
-        backend = FakeFocusBackend(visible=False)
-        result = actions.focus(100, backend=backend)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "no_window")
-
-    def test_bad_pid_is_a_value_not_an_exception(self):
-        result = actions.focus(0, backend=FakeFocusBackend())
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "no_window")
 
 
 # --- launch ---------------------------------------------------------------
@@ -323,85 +271,6 @@ class TestResolveKill(unittest.TestCase):
         result = actions.resolve_kill(session(pid=100, started_at=1000), rows)
         self.assertTrue(result["ok"])
         self.assertEqual(result["reason"], "killed")
-
-
-# --- restart --------------------------------------------------------------
-
-class TestRestart(unittest.TestCase):
-    def test_raw_cmdline_is_passed_through_unmodified(self):
-        # The DoD check: a quoted path with a space must survive byte for byte,
-        # and Popen must receive a STRING (not a list) for that path.
-        raw = '"C:\\Program Files\\agent\\a.exe" --flag "D:\\ws\\my project"'
-        popen = FakePopen(pid=5555)
-        result = actions.restart(session(pid=100, started_at=1000, cmdline=raw),
-                                 popen=popen, identity_probe=lambda pid: 1000)
-        self.assertTrue(result["ok"])
-        argv, kwargs = popen.calls[0]
-        self.assertEqual(argv, raw)
-        self.assertIsInstance(argv, str)
-        self.assertEqual(kwargs["cwd"], "D:/ws/projV")
-        self.assertEqual(result["cmdline"], raw)
-
-    def test_cwd_unknown_is_refused(self):
-        popen = FakePopen()
-        result = actions.restart(session(cwd="?"), popen=popen,
-                                 identity_probe=lambda pid: 1000)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "cwd_unknown")
-        self.assertEqual(popen.calls, [])
-
-    def test_second_restart_is_refused(self):
-        pending = set()
-        popen = FakePopen()
-        first = actions.restart(session(pid=100, started_at=1000), popen=popen,
-                                pending=pending, identity_probe=lambda pid: 1000)
-        self.assertTrue(first["ok"])
-        second = actions.restart(session(pid=100, started_at=1000), popen=popen,
-                                 pending=pending, identity_probe=lambda pid: 1000)
-        self.assertFalse(second["ok"])
-        self.assertEqual(second["reason"], "restart_pending")
-        self.assertEqual(len(popen.calls), 1)
-
-    def test_pending_is_cleared_after_adoption(self):
-        pending = set()
-        popen = FakePopen()
-        actions.restart(session(pid=100, started_at=1000), popen=popen,
-                        pending=pending, identity_probe=lambda pid: 1000)
-        actions.clear_restart_pending(session(pid=100, started_at=1000), pending)
-        again = actions.restart(session(pid=100, started_at=1000), popen=popen,
-                                pending=pending, identity_probe=lambda pid: 1000)
-        self.assertTrue(again["ok"])
-
-    def test_empty_cmdline_is_refused(self):
-        result = actions.restart(session(cmdline="   "), popen=FakePopen(),
-                                 identity_probe=lambda pid: 1000)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "no_command")
-
-    def test_spawn_failure_releases_the_pending_slot(self):
-        pending = set()
-        popen = FakePopen(raises=OSError("gone"))
-        result = actions.restart(session(pid=100, started_at=1000), popen=popen,
-                                 pending=pending, identity_probe=lambda pid: 1000)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "spawn_failed")
-        self.assertEqual(pending, set())
-
-    def test_restart_refuses_without_a_probe(self):
-        # Fail closed: no probe means no relaunch.
-        popen = FakePopen()
-        result = actions.restart(session(pid=100, started_at=1000), popen=popen)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "identity_unverified")
-        self.assertEqual(popen.calls, [])
-
-    def test_restart_refuses_a_mismatched_identity(self):
-        popen = FakePopen()
-        result = actions.restart(session(pid=100, started_at=1000), popen=popen,
-                                 identity_probe=lambda pid: 2000)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "identity_unverified")
-        self.assertEqual(popen.calls, [])
 
 
 if __name__ == "__main__":

@@ -26,6 +26,18 @@ ROLES: Dict[str, str] = {
     "danger": "#f06a6a",
 }
 
+# --- icons ----------------------------------------------------------------
+# Geometry, not decoration. The icons are drawn from these numbers, so one rect
+# works at any DPI and no image file and no icon font ships with the panel
+# (`tests/unit/test_renderer.py` forbids the font, and a PNG would be four
+# resolutions of the same lie).
+ICON_PX = 18
+ICON_STROKE = 1.5
+ICON_GAP = 6
+ICON_PAD = 6
+HOVER_ROLE = "accent"
+GLYPH_AT = "@"
+
 STATUS_ROLE = {
     "blocked": "warn",
     "error": "danger",

@@ -54,7 +54,7 @@ class TestStartFrom(WindowCase):
         try:
             entry = {"id": "cmd", "args": [],
                      "command": os.environ.get("COMSPEC", "cmd.exe")}
-            pane = self.window.start_from(entry, tmp, "panel")
+            pane = self.window.start_from(entry, tmp)
             self.assertIsNotNone(pane)
             self.assertEqual(os.path.normcase(tmp), os.path.normcase(pane.cwd))
             pane.stop()
@@ -63,7 +63,7 @@ class TestStartFrom(WindowCase):
 
     def test_a_missing_program_is_a_receipt_not_a_crash(self):
         result = self.window.start_from({"id": "nope", "command": "definitely-not-here.exe"},
-                                        os.getcwd(), "panel")
+                                        os.getcwd())
         self.assertIsNone(result)
         self.assertIn("not found", self.window.receipt)
 
@@ -164,6 +164,83 @@ class TestReceipts(WindowCase):
     def test_inject_without_a_pane_falls_back_to_the_clipboard(self):
         self.window.inject_path_into_pane(r"D:\x\y.txt", at_prefix=True)
         self.assertIn("clipboard", self.window.receipt)
+
+    def test_the_sent_text_is_the_quoted_one(self):
+        # The receipt shows what the PTY got: a path with a space arrives quoted,
+        # so "D:\my project" is one argument and not two.
+        class _Pane:
+            title = "t"
+            cwd = r"D:\ws"
+            written = []
+
+            def write(self, text):
+                self.written.append(text)
+
+        pane = _Pane()
+        self.window.panes.append(pane)
+        try:
+            self.window.inject_path_into_pane(r"D:\my project\a.py")
+            self.assertEqual(['"D:\\my project\\a.py"'], pane.written)
+            self.assertIn(r'"D:\my project\a.py"', self.window.receipt)
+        finally:
+            self.window.panes.remove(pane)
+
+
+class TestRowIcons(WindowCase):
+    """The row's two icons, clicked the way a user clicks them."""
+
+    def _start(self):
+        entry = {"id": "cmd", "args": [],
+                 "command": os.environ.get("COMSPEC", "cmd.exe")}
+        pane = self.window.start_from(entry, os.getcwd())
+        self.assertIsNotNone(pane)
+        # The PTY is born on the page's first grid report, which needs a web view
+        # that is not on screen here. The row only needs an identity, and a fake
+        # one keeps the test from killing anything real.
+        pane.session_pid = 43210
+        self.window.refresh_now()
+        return pane
+
+    def _click(self, which: int):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtTest import QTest
+        from ostlr.qt import rowdelegate
+        item = self.window.list.item(0)
+        self.assertIsNotNone(item, "no row to click")
+        rect = QRectF(self.window.list.visualItemRect(item))
+        slot = rowdelegate.action_rects(rect)[which]
+        QTest.mouseClick(self.window.list.viewport(), _Qt.LeftButton,
+                         pos=slot.center().toPoint())
+
+    def test_a_session_started_here_is_always_a_pane(self):
+        pane = self._start()
+        self.assertIn(pane, self.window.panes)
+        pane.stop()
+
+    def test_the_close_icon_closes_that_session(self):
+        self._start()
+        self.window._confirm_close = lambda pane, facts: True
+        self._click(1)
+        self.assertEqual([], self.window.panes)
+        self.assertIn("closed", self.window.receipt)
+
+    def test_a_cancelled_confirmation_keeps_the_session(self):
+        self._start()
+        self.window._confirm_close = lambda pane, facts: False
+        self._click(1)
+        self.assertEqual(1, len(self.window.panes))
+        self.assertIn("cancelled", self.window.receipt)
+        for pane in list(self.window.panes):
+            pane.stop()
+
+    def test_the_terminal_icon_opens_one_more_pane(self):
+        self._start()
+        before = len(self.window.panes)
+        self._click(0)
+        self.assertEqual(before + 1, len(self.window.panes))
+        for pane in list(self.window.panes):
+            pane.stop()
 
 
 if __name__ == "__main__":

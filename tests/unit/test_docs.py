@@ -49,8 +49,10 @@ class TestReadme(unittest.TestCase):
         self.assertIn("docs/producers/status-levels.md", self.text)
 
     def test_the_three_promises_are_on_the_first_screen(self):
-        # What the panel is for, in the user's words - the reason it exists.
-        for line in ("at a glance", "all in hand", "one right-click"):
+        # What the panel is for, in the user's words - the reason it exists. The
+        # third gesture changed from "right-click" to an icon on the row itself;
+        # the promise (one action hands the path over) did not.
+        for line in ("at a glance", "all in hand", "one icon to hand the path"):
             with self.subTest(line=line):
                 self.assertIn(line, self.text)
 

@@ -51,13 +51,34 @@ class TestGpuIsSummedOverTheTree(unittest.TestCase):
 
 
 class TestTheRowLeavesRoomForItsNumber(unittest.TestCase):
-    def test_the_bar_is_not_drawn_at_a_fixed_offset(self):
-        # "mem 313 MB" is wider than 52 px; the bar started there and covered it.
-        from pathlib import Path
-        source = (Path(procstat.__file__).parent / "rowdelegate.py").read_text(
-            encoding="utf-8")
-        self.assertNotIn("bx + 52", source)
-        self.assertIn("horizontalAdvance(text)", source)
+    """The gauge line is three columns, and the bar is what is left between them.
+
+    The old row drew "cpu 12%" then placed the bar at a fixed offset from the
+    text's left edge. "mem 313 MB" is wider than that offset, so the bar covered
+    the number it was supposed to illustrate. Now the columns are computed once
+    and both the painter and this test read them.
+    """
+
+    def _columns(self, width=420):
+        from PySide6.QtCore import QRectF
+        from ostlr.qt import rowdelegate
+        return rowdelegate.gauge_columns(QRectF(0, 0, width, 80))
+
+    def test_the_three_columns_do_not_overlap(self):
+        columns = self._columns()
+        self.assertLessEqual(columns["label"].right(), columns["bar"].left())
+        self.assertLessEqual(columns["bar"].right(), columns["value"].left())
+        self.assertLessEqual(columns["value"].right(), 420)
+
+    def test_the_bar_grows_with_the_window(self):
+        narrow = self._columns(300)["bar"].width()
+        wide = self._columns(700)["bar"].width()
+        self.assertGreater(wide - narrow, 300)
+
+    def test_a_narrow_row_drops_the_bar_instead_of_covering_the_number(self):
+        # Below this width there is no bar at all: a 4 px bar is a lie about scale.
+        self.assertLess(self._columns(150)["bar"].width(), 24)
+        self.assertGreater(self._columns(420)["bar"].width(), 24)
 
 
 if __name__ == "__main__":

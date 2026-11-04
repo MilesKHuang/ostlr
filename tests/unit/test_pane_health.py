@@ -52,22 +52,34 @@ class TestCpuIsMeasured(unittest.TestCase):
         self.assertIn('human_mb(row.get("rss"))', read("rowdelegate.py"))
 
 
-class TestKillIsWired(unittest.TestCase):
-    def test_the_menu_reads_the_real_identity(self):
+class TestCloseIsAGuardedTreeKill(unittest.TestCase):
+    """Closing a pane is the only ending now - and it is still a tree kill.
+
+    Merging "close" and "end" deleted a duplicate menu entry, not a guarantee: the
+    taskkill still runs through the identity probe, and the confirmation still
+    states the process count and the memory before anything dies.
+    """
+
+    def test_the_tree_kill_still_guards_identity(self):
         source = read("app.py")
-        self.assertIn("procstat.start_epoch(pid)", source)
         self.assertIn("identity_probe=procstat.start_epoch", source)
+        self.assertIn("procstat.start_epoch(pid)", source)
 
     def test_nothing_asks_for_a_kill_without_an_identity(self):
         self.assertNotIn('"started_at": 0', read("app.py"))
 
-    def test_the_pane_stops_only_after_the_kill_was_accepted(self):
+    def test_the_tree_is_ended_before_the_pty_stops(self):
         # Stopping the pane first made a refused kill look successful: the row
-        # vanished and the process kept running.
+        # vanished and the processes kept running.
         source = read("app.py")
-        kill_at = source.index("actions_mod.kill(")
-        stop_at = source.index("pane.stop()", kill_at)
-        self.assertLess(kill_at, stop_at)
+        ending = source.index("_end_tree(pid")
+        stopping = source.index("pane.stop()", ending)
+        self.assertLess(ending, stopping)
+
+    def test_the_close_states_the_count_and_the_memory_first(self):
+        source = read("app.py")
+        self.assertIn("process(es) end with it", source)
+        self.assertIn("CLOSE_CONFIRM_MB", source)
 
 
 class TestStateIsHeld(unittest.TestCase):

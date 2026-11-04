@@ -14,7 +14,6 @@ implementation plan is `docs/sop/steve-ostlr.md`.
 | Python 3.10 or newer, launched as `py -3` | the `py` launcher ships with python.org installs; scripts and docs use that one form |
 | `pip install -r requirements.txt` succeeds | PySide6, pywinpty, psutil; pystray and pillow are optional and their absence is stated on screen |
 | WebView2 runtime | QtWebEngine hosts xterm.js; it ships with Windows 11 and is a download on Windows 10 |
-| Windows Terminal (`wt.exe`) - optional | one external-window fallback; missing it costs nothing |
 
 What was measured on the author's machine - a thin PyPI index, mirror timings, a
 WebView2 version, the build size - is in [`docs/dev-machine.md`](docs/dev-machine.md).
@@ -61,6 +60,9 @@ py -3 -m unittest discover -s tests -v
   adopted, say so on screen.
 - Do not adopt a PTY you do not own. An external session gets focus, a copy of
   its path, or a shell in its directory - never a pretend "attach".
+- Do not offer a second destination for a session. A TUI starts as a pane of
+  this window or not at all: an external console is a row you cannot type into,
+  and `start_from()` takes no `location`.
 - Do not kill a process tree without showing the pid count and the memory first.
 - Do not leave orphan children on exit; panes stop their own PTY.
 - Do not put a colour, a font size or a glyph outside `ostlr/qt/style.py` (roles)
