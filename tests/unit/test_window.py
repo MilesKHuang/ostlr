@@ -118,6 +118,59 @@ class TestL1Wiring(WindowCase):
                     open_pane.stop()
 
 
+class TestL1Bridge(WindowCase):
+    """The protocol's rules must still be visible after they cross into a file.
+
+    An L1 record becomes an L2 one, and the L2 contract is stricter than the
+    protocol unless it is told otherwise: OSC 7501 makes `kind` optional, and a
+    report is the only thing that can say `blocked`.
+    """
+
+    def _pane(self, pid):
+        pane = self.window.new_terminal(cwd=os.getcwd(), title="l1")
+        self.assertIsNotNone(pane)
+        pane.session_pid = pid
+        return pane
+
+    def test_a_blocked_report_without_a_kind_reaches_the_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OSTLR_STATUS_DIR"] = tmp
+            try:
+                pane = self._pane(434343)
+                pane._apply_l1({"state": "blocked", "id": "", "app": "pi",
+                                "kind": "", "title": "", "msg": "Approve?",
+                                "progress": None})
+                from ostlr import status
+                record = status.read_status(434343, tmp)
+            finally:
+                os.environ.pop("OSTLR_STATUS_DIR", None)
+                for open_pane in list(self.window.panes):
+                    open_pane.stop()
+        self.assertIsNotNone(record)
+        self.assertEqual("blocked", record["state"])
+        self.assertEqual("", record["kind"])
+
+    def test_a_shell_prompt_drops_the_working_record(self):
+        # OSC 133 A says the command ended. `working` may not outlive it, or the
+        # row keeps claiming work nobody is doing.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OSTLR_STATUS_DIR"] = tmp
+            try:
+                pane = self._pane(434344)
+                pane._apply_l1({"state": "working", "id": "", "app": "pi",
+                                "kind": "", "title": "", "msg": "reading",
+                                "progress": None})
+                from ostlr import status
+                self.assertIsNotNone(status.read_status(434344, tmp))
+                pane._on_data(b"\x1b]133;A\x07$ ")
+                gone = status.read_status(434344, tmp)
+            finally:
+                os.environ.pop("OSTLR_STATUS_DIR", None)
+                for open_pane in list(self.window.panes):
+                    open_pane.stop()
+        self.assertIsNone(gone)
+
+
 class TestWelcome(WindowCase):
     def test_the_welcome_page_disappears_when_a_pane_opens(self):
         # No tab bar any more: the welcome text is a page in the stack, and the

@@ -42,7 +42,7 @@ themselves; anything else reads `unknown`, never rendered as `idle`.
 
 | Bonus | What it is |
 |---|---|
-| **The TUI/CLI reports its own state** | OSC 7501 ([Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status), rev 0.3) is **live**: [pi](https://github.com/earendil-works/pi) is verified. File format and wrapper: [status-levels](docs/producers/status-levels.md) |
+| **The TUI/CLI reports its own state** | OSC 7501 ([Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status), rev 0.4) is **live**: [pi](https://github.com/earendil-works/pi) is verified. File format and wrapper: [status-levels](docs/producers/status-levels.md) |
 | **Same rendering as the native TUI** | the terminal draws its own frame and the OS terminal's own font is used - [parity](docs/parity.md) |
 | **Scriptable** | `py -3 -m ostlr.status --list` shows what the programs report right now (`--prune` drops dead pids); `py -3 -m ostlr run -- <cmd>` wraps a session you cannot start here; `--selftest` runs headless |
 | **Or pack an exe** | build from the clean venv (see `docs/dev-machine.md`): one folder, ~610 MB, ~1 s start; `--onefile` for a single file |

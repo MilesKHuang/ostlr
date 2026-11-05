@@ -247,6 +247,9 @@ class TerminalPane(QWidget):
         self.renderer = ""
         self._l1 = None
         self._l1_store = None
+        # What the status file currently says about this pane, so an identical
+        # report is not written twice.
+        self._l1_claim = None
         try:
             from ..probe import l1 as l1_mod
             self._l1 = l1_mod.Stream()
@@ -383,9 +386,25 @@ class TerminalPane(QWidget):
         if self._l1_store is None:
             self.l1_report.emit(self.session_pid, report)
             return
-        summary = self._l1_store.apply(report)
+        self._l1_store.apply(report)
         self.l1_report.emit(self.session_pid, report)
-        if not self.session_pid:
+        self._publish_l1()
+
+    def _publish_l1(self) -> None:
+        """Write the record this pane owns from its store, or withdraw it.
+
+        Both places that change the records (a report, and a lifetime event that
+        dropped some) end here, so the file always says what the store says; one
+        writer per file, as the row's own comment demands.
+        """
+        if self._l1_store is None or not self.session_pid:
+            return
+        summary = self._l1_store.summary()
+        claim = None if summary is None else (summary.state, summary.kind,
+                                              summary.msg)
+        if claim == self._l1_claim:
+            # A program may repeat itself as fast as it can write; the file is
+            # only read on the next tick, so an identical record is not re-written.
             return
         try:
             from .. import status as status_mod
@@ -393,11 +412,15 @@ class TerminalPane(QWidget):
                 existing = status_mod.read_status(self.session_pid) or {}
                 if str(existing.get("source")) == "l1":
                     status_mod.clear_status(self.session_pid)
+                self._l1_claim = None
                 return
             status_mod.write_status(self.session_pid, summary.state,
                                     kind=summary.kind, msg=summary.msg,
                                     cwd=self.cwd or os.getcwd(), source="l1")
+            self._l1_claim = claim
         except Exception:
+            # The claim is kept only after the file took it: a failed write has to
+            # be retried by the next report, not skipped as "already said".
             pass
 
     def _withdraw(self) -> None:
@@ -449,10 +472,22 @@ class TerminalPane(QWidget):
         # (the sequence is zero-width and ignored there).
         try:
             from ..probe import l1 as l1_mod
-            reports, probe = self._l1.feed(chunk)
-            if probe and self.bridge is not None:
-                self.bridge.write(l1_mod.PROBE)   # answer or the CLI stays silent
-            for report in reports:
+            result = self._l1.feed(chunk)
+            if result.probe and self.bridge is not None:
+                # Answer at once: a CLI that gets no reply may stay silent for the
+                # whole session, and DA1 must not win the race.
+                self.bridge.write(l1_mod.REPLY)
+            if result.reset or result.prompt:
+                # Lifetime, 0.4: a new shell prompt ends the command that was
+                # running, a full reset ends every record. Applied here because
+                # this is the only place that sees those bytes.
+                if self._l1_store is not None:
+                    if result.reset:
+                        self._l1_store.reset()
+                    if result.prompt:
+                        self._l1_store.drop_transient()
+                    self._publish_l1()
+            for report in result.reports:
                 self._apply_l1(report)
         except Exception:
             pass

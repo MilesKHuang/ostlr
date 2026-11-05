@@ -32,7 +32,7 @@
 
 | Bonus | 是什么 |
 |---|---|
-| **状态由 TUI/CLI 自己说** | OSC 7501（[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)，rev 0.3）**已通**：[pi](https://github.com/earendil-works/pi) 已验证支持。文件格式与包装器：[status-levels](docs/producers/status-levels.md) |
+| **状态由 TUI/CLI 自己说** | OSC 7501（[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status)，rev 0.4）**已通**：[pi](https://github.com/earendil-works/pi) 已验证支持。文件格式与包装器：[status-levels](docs/producers/status-levels.md) |
 | **GUI 与原生体验一致** | Ostlr 里跑的 TUI 和原生渲染一致 —— [parity](docs/parity.md) |
 | **脚本可用** | `py -3 -m ostlr.status --list` 看程序此刻在报什么（`--prune` 清掉已消失的进程）；`py -3 -m ostlr run -- <cmd>` 包住不方便在这里启动的会话；`--selftest` 跑无界面自检 |
 | **也能打包成 exe** | 在干净 venv 里构建（见 `docs/dev-machine.md`）：一个目录、约 610 MB、约一秒启动；`--onefile` 出单文件 |

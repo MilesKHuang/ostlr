@@ -5,7 +5,7 @@ sources, in this order of authority:
 
 | Level | Source | What it can say |
 |---|---|---|
-| **L1** | OSC 7501, the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (revision 0.3), read out of the PTY the panel owns | anything the program reports: `working`, `blocked` with a `kind`, `done`, `error`, `idle` |
+| **L1** | OSC 7501, the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status) (revision 0.4), read out of the PTY the panel owns | anything the program reports: `working`, `blocked` with a `kind`, `done`, `error`, `idle` |
 | **L2** | a JSON status file per pid: `%LOCALAPPDATA%\ostlr\status\<pid>.json` | the same five states; the only source that can say `blocked` from outside a pane |
 | **none** | nothing reported | `unknown`, with the reason on screen. Never `idle` |
 
@@ -14,18 +14,37 @@ nobody spoke.
 
 ## L1 - the terminal side of OSC 7501
 
-The panel owns the PTY, so it is the terminal side of the protocol and has two
+The panel owns the PTY, so it is the terminal side of the protocol and has three
 obligations (`ostlr/probe/l1.py`):
 
 1. **Answer the probe.** `ESC ] 7501 ; ? ST` means "do you understand this?".
    A producer that gets no reply may stay silent for the whole session, so the
-   reply is written the moment the query is seen.
+   reply is written the moment the query is seen - and before the DA1 that a
+   producer sends right behind it can win the race and settle the question the
+   other way. Revision 0.4 lets a terminal say what it accepts, so ours answers
+   `ESC ] 7501 ; ? : states=idle,working,blocked,done,error : kinds=permission,question,auth ST`
+   (written without the spaces the grammar forbids). A producer written against
+   0.3 must ignore pairs it does not know, and the bare `ESC ] 7501 ; ? ST` is
+   still a legal reply for one that does not.
 2. **Keep records.** One record per `id`; a report replaces its record, `clear`
-   removes it and its subtree, and the row shows the most urgent of them. The
-   spec's exit rule (`working` and `blocked` are dropped when the program exits)
-   is applied as well.
+   removes it and its subtree, and the row shows the most urgent of them. A
+   record without `app` inherits it from the nearest ancestor id that has one,
+   and past 256 records the least recently updated one is dropped.
+3. **Apply the lifetime.** A process exit or a new shell prompt (OSC 133 A) drops
+   `working` and `blocked`; `done` and `error` survive both. A full reset (RIS)
+   removes every record; a soft reset (DECSTR) touches none.
 
-A report that breaks the spec is rejected as a whole, not half-applied.
+A report is rejected **whole** when it breaks a limit, when `msg`/`title` is not
+decodable base64, when the decoded text holds a control character (U+0000-U+001F,
+U+007F, U+0080-U+009F, tab included), or when its `id` is outside the grammar.
+The other failures are not fatal: an unknown `kind`, a `progress` that is not
+0-100 and an `app` outside the character set are treated as **absent**, and the
+state the program did report is kept. Discarding those would turn a program that
+is waiting for a human into a row that says `unknown`.
+
+Text we keep from a report is disarmed before it is shown: bidi overrides and
+zero-width joiners are removed, which is what 0.4 asks for text shown outside the
+terminal grid. The grid itself still receives the original bytes.
 
 ## L2 - the status file
 
@@ -39,7 +58,9 @@ half-written file:
 ```
 
 A record is accepted only when it is valid JSON, carries every required field,
-names one of the five states, and - for `blocked` - a valid `kind`. Anything else
+names one of the five states, and - for `blocked` - a valid `kind` or none at all:
+OSC 7501 makes `kind` optional, and a program that is blocked without saying why
+is still blocked. Anything else
 counts as absent: the row falls back to `unknown` and the file produces one log
 line per read, not one per field.
 

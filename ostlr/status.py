@@ -101,9 +101,11 @@ def build_record(pid: int, state: str, kind: str = "", msg: str = "",
     if kind_key and kind_key not in L2_KINDS:
         raise ValueError("kind must be one of %s, got %r" % (", ".join(L2_KINDS), kind))
     if key == "blocked" and not kind_key:
-        # The panel uses `kind` to decide "wake the human"; a blocked record
-        # without one is unusable, so refuse it here rather than at the reader.
-        raise ValueError("state=blocked requires a kind (%s)" % ", ".join(L2_KINDS))
+        # Not an error: OSC 7501 makes `kind` optional, and a program that says it
+        # is blocked without saying why is still blocked. Refusing the record
+        # would drop the one state a human has to act on, so the row wakes the
+        # human for a reason the program did not name.
+        pass
 
     text = (msg or "").replace("\r", " ").replace("\n", " ").strip()
     if len(text) > CLIP_CHARS:

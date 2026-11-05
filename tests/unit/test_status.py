@@ -65,9 +65,13 @@ class TestRecord(TempStatusDir):
         with self.assertRaises(ValueError):
             status_mod.build_record(1, "zombie")
 
-    def test_blocked_requires_kind(self):
-        with self.assertRaises(ValueError):
-            status_mod.build_record(1, "blocked")
+    def test_blocked_without_a_kind_is_kept(self):
+        # OSC 7501 makes `kind` optional. A program that says it is blocked
+        # without saying why is still blocked, and that is the one state a human
+        # has to act on: refusing the record would hide it.
+        rec = status_mod.build_record(1, "blocked")
+        self.assertEqual(rec["state"], "blocked")
+        self.assertEqual(rec["kind"], "")
 
     def test_invalid_kind_rejected(self):
         with self.assertRaises(ValueError):
@@ -306,10 +310,14 @@ class TestCli(TempStatusDir):
         result = self._cli("--pid", "1")
         self.assertEqual(result.returncode, 2)
 
-    def test_blocked_without_kind_is_usage_error(self):
+    def test_blocked_without_a_kind_is_written(self):
+        # The CRITICAL half of the previous test: the CLI must be able to write
+        # what a program is allowed to report (OSC 7501: `kind` is optional).
         result = self._cli("--state", "blocked", "--pid", "1")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("kind", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = status_mod.read_status(1, self.dir)
+        self.assertEqual(data["state"], "blocked")
+        self.assertEqual(data["kind"], "")
 
     def test_default_pid_is_this_process(self):
         result = self._cli("--state", "working", "--msg", "self")
