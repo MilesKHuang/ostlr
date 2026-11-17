@@ -195,6 +195,23 @@
   term.onData(function (data) { send({ k: data }); });
   term.onResize(function (size) { send({ r: [size.cols, size.rows] }); });
 
+  // --- Ctrl+C copies a selection -------------------------------------------
+  // xterm.js hands ^C straight to the program, which is right for SIGINT but
+  // means a selection can never be copied from inside a pane: the byte reaches
+  // the child, the clipboard keeps whatever it had, and the next paste shows
+  // that instead of what was selected. The Windows convention belongs to the
+  // host, so it is bound here: WITH a selection Ctrl+C copies and the byte is
+  // swallowed, otherwise it stays ^C. Ctrl+V is left alone -- the pane's own
+  // right-click paste and the program's own paste both still work.
+  term.attachCustomKeyEventHandler(function (e) {
+    if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.shiftKey) return true;
+    if ((e.key || '').toLowerCase() !== 'c' || !term.hasSelection()) return true;
+    send({ copysel: term.getSelection() });
+    e.preventDefault();
+    return false;
+  });
+
+
   // --- diagnostics ---------------------------------------------------------
   // `const term` is a lexical binding, not a window property, so runJavaScript
   // cannot see it. Without this object every measurement from Python silently

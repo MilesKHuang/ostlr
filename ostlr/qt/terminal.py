@@ -564,6 +564,18 @@ class TerminalPane(QWidget):
         if "k" in payload:
             if self.bridge is not None:
                 self.bridge.write(payload["k"])
+        elif "copysel" in payload:
+            # The page copied a selection (Ctrl+C with one). It goes through the
+            # ONE clipboard implementation, so a copy from a pane and a copy of a
+            # path share the retry, the failure reasons and the encoding.
+            text = str(payload.get("copysel") or "")
+            try:
+                from .. import actions as actions_mod
+                writer = actions_mod.default_clipboard()
+                if text and writer is not None:
+                    writer.write(text)
+            except Exception:
+                pass
         elif "renderer" in payload:
             # The page says which renderer it got. A fallback is reported, never
             # assumed: the DOM renderer draws the frame with the font, which is a
